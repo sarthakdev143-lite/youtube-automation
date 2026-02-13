@@ -12,6 +12,7 @@ import github.sarthakdev143.media_factory.model.SceneType;
 import github.sarthakdev143.media_factory.model.TransitionType;
 import github.sarthakdev143.media_factory.model.VideoJobState;
 import github.sarthakdev143.media_factory.model.VideoJobStatus;
+import github.sarthakdev143.media_factory.service.JobInProgressException;
 import github.sarthakdev143.media_factory.service.VideoProcessingService;
 import github.sarthakdev143.media_factory.service.impl.CompositionManifestValidator;
 import org.junit.jupiter.api.Test;
@@ -156,6 +157,37 @@ class VideoControllerTest {
                 .andExpect(content().string(containsString("privacyStatus must be one of")));
 
         verifyNoInteractions(videoProcessingService);
+    }
+
+    @Test
+    void generateReturnsConflictWhenAnotherJobIsActive() throws Exception {
+        when(videoProcessingService.submitJob(any(), any(), anyInt(), anyString(), anyString(), any(PublishOptions.class), any()))
+                .thenThrow(new JobInProgressException("job-busy-1", VideoJobState.PROCESSING));
+        when(videoProcessingService.getJobStatus("job-busy-1")).thenReturn(Optional.of(new VideoJobStatus(
+                "job-busy-1",
+                VideoJobState.PROCESSING,
+                "Uploading video to YouTube.",
+                Instant.parse("2026-01-01T00:00:00Z"),
+                Instant.parse("2026-01-01T00:00:10Z"),
+                PrivacyStatus.PRIVATE,
+                List.of(),
+                null,
+                null,
+                null,
+                null,
+                null)));
+
+        mockMvc.perform(multipart("/api/video/generate")
+                        .file(validImage())
+                        .file(validAudio())
+                        .param("duration", "60")
+                        .param("title", "My title")
+                        .param("description", "My description"))
+                .andExpect(status().isConflict())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.jobId").value("job-busy-1"))
+                .andExpect(jsonPath("$.state").value("PROCESSING"))
+                .andExpect(jsonPath("$.message").value("Uploading video to YouTube."));
     }
 
     @Test
@@ -365,6 +397,37 @@ class VideoControllerTest {
         mockMvc.perform(get("/api/video/status/missing"))
                 .andExpect(status().isNotFound())
                 .andExpect(content().string(containsString("Job not found")));
+    }
+
+    @Test
+    void getActiveStatusReturnsCurrentActiveJob() throws Exception {
+        VideoJobStatus activeJob = new VideoJobStatus(
+                "job-active-1",
+                VideoJobState.PROCESSING,
+                "Rendering video with FFmpeg.",
+                Instant.parse("2026-01-01T00:00:00Z"),
+                Instant.parse("2026-01-01T00:00:05Z"),
+                PrivacyStatus.PRIVATE,
+                List.of(),
+                null,
+                null,
+                null,
+                null,
+                null);
+        when(videoProcessingService.getActiveJobStatus()).thenReturn(Optional.of(activeJob));
+
+        mockMvc.perform(get("/api/video/status/active"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.jobId").value("job-active-1"))
+                .andExpect(jsonPath("$.state").value("PROCESSING"));
+    }
+
+    @Test
+    void getActiveStatusReturnsNoContentWhenNoActiveJob() throws Exception {
+        when(videoProcessingService.getActiveJobStatus()).thenReturn(Optional.empty());
+
+        mockMvc.perform(get("/api/video/status/active"))
+                .andExpect(status().isNoContent());
     }
 
     private CompositionManifestRequest validCompositionManifest() {

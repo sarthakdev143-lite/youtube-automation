@@ -26,6 +26,7 @@ import github.sarthakdev143.media_factory.model.composition.CompositionScenePlan
 import github.sarthakdev143.media_factory.model.composition.CompositionTransitionPlan;
 import github.sarthakdev143.media_factory.model.composition.CompositionVisualEditPlan;
 import github.sarthakdev143.media_factory.service.CompositionRenderer;
+import github.sarthakdev143.media_factory.service.JobInProgressException;
 import github.sarthakdev143.media_factory.service.VideoProcessingService;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -44,6 +45,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -63,6 +65,8 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
     private final Counter thumbnailFailureCounter;
     private final Counter uploadFailureCounter;
     private final Counter thumbnailUploadFailureCounter;
+    private final Object submissionLock = new Object();
+    private String activeJobId;
 
     public DefaultVideoProcessingService(
             YouTubeServiceProvider youTubeServiceProvider,
@@ -94,6 +98,9 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
             PublishOptions publishOptions,
             MultipartFile thumbnail) throws IOException {
         String jobId = UUID.randomUUID().toString();
+        reserveActiveJobSlot(jobId);
+
+        boolean acceptedForProcessing = false;
         PublishOptions normalizedPublishOptions = normalizePublishOptions(publishOptions);
         Path imagePath = null;
         Path audioPath = null;
@@ -115,6 +122,7 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
             deleteTempFile(imagePath);
             deleteTempFile(audioPath);
             deleteTempFile(thumbnailPath);
+            releaseActiveJobSlot(jobId);
             throw e;
         }
 
@@ -132,18 +140,24 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
         Path finalAudioPath = audioPath;
         Path finalThumbnailPath = thumbnailPath;
         String finalThumbnailType = thumbnail != null ? thumbnail.getContentType() : null;
-        taskExecutor.execute(() -> processBasicJob(
-                jobId,
-                finalImagePath,
-                finalAudioPath,
-                finalThumbnailPath,
-                finalThumbnailType,
-                durationSeconds,
-                title,
-                description,
-                normalizedPublishOptions));
-
-        return jobId;
+        try {
+            taskExecutor.execute(() -> processBasicJob(
+                    jobId,
+                    finalImagePath,
+                    finalAudioPath,
+                    finalThumbnailPath,
+                    finalThumbnailType,
+                    durationSeconds,
+                    title,
+                    description,
+                    normalizedPublishOptions));
+            acceptedForProcessing = true;
+            return jobId;
+        } finally {
+            if (!acceptedForProcessing) {
+                releaseActiveJobSlot(jobId);
+            }
+        }
     }
 
     @Override
@@ -161,6 +175,9 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
         Map<String, MultipartFile> safeAssets = assets == null ? Map.of() : assets;
 
         String jobId = UUID.randomUUID().toString();
+        reserveActiveJobSlot(jobId);
+
+        boolean acceptedForProcessing = false;
         PublishOptions normalizedPublishOptions = normalizePublishOptions(publishOptions);
 
         Path audioPath = null;
@@ -187,6 +204,7 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
             deleteTempFile(audioPath);
             deleteTempFile(thumbnailPath);
             deleteTempFiles(assetPaths.values());
+            releaseActiveJobSlot(jobId);
             throw e;
         }
 
@@ -206,23 +224,50 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
         String finalThumbnailType = thumbnail != null ? thumbnail.getContentType() : null;
         Map<String, Path> finalAssetPaths = new LinkedHashMap<>(assetPaths);
 
-        taskExecutor.execute(() -> processCompositionJob(
-                jobId,
-                manifest,
-                finalAssetPaths,
-                finalAudioPath,
-                finalThumbnailPath,
-                finalThumbnailType,
-                title,
-                description,
-                normalizedPublishOptions));
-
-        return jobId;
+        try {
+            taskExecutor.execute(() -> processCompositionJob(
+                    jobId,
+                    manifest,
+                    finalAssetPaths,
+                    finalAudioPath,
+                    finalThumbnailPath,
+                    finalThumbnailType,
+                    title,
+                    description,
+                    normalizedPublishOptions));
+            acceptedForProcessing = true;
+            return jobId;
+        } finally {
+            if (!acceptedForProcessing) {
+                releaseActiveJobSlot(jobId);
+            }
+        }
     }
 
     @Override
     public Optional<VideoJobStatus> getJobStatus(String jobId) {
         return Optional.ofNullable(jobs.get(jobId));
+    }
+
+    @Override
+    public Optional<VideoJobStatus> getActiveJobStatus() {
+        synchronized (submissionLock) {
+            if (activeJobId == null) {
+                return Optional.empty();
+            }
+
+            VideoJobStatus activeJob = jobs.get(activeJobId);
+            if (activeJob == null) {
+                return Optional.empty();
+            }
+
+            if (!isActiveState(activeJob.state())) {
+                activeJobId = null;
+                return Optional.empty();
+            }
+
+            return Optional.of(activeJob);
+        }
     }
 
     private void processBasicJob(
@@ -236,7 +281,7 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
             String description,
             PublishOptions publishOptions) {
         Path outputVideoPath = null;
-        updateJobState(jobId, VideoJobState.PROCESSING, "Generating video and uploading to YouTube.");
+        updateJobState(jobId, VideoJobState.PROCESSING, "Rendering video with FFmpeg.");
 
         try {
             outputVideoPath = Files.createTempFile("media-factory-output-", ".mp4");
@@ -262,6 +307,7 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
             deleteTempFile(audioPath);
             deleteTempFile(thumbnailPath);
             deleteTempFile(outputVideoPath);
+            releaseActiveJobSlot(jobId);
         }
     }
 
@@ -276,7 +322,7 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
             String description,
             PublishOptions publishOptions) {
         Path outputVideoPath = null;
-        updateJobState(jobId, VideoJobState.PROCESSING, "Generating composition and uploading to YouTube.");
+        updateJobState(jobId, VideoJobState.PROCESSING, "Rendering composition timeline with FFmpeg.");
 
         try {
             outputVideoPath = Files.createTempFile("media-factory-composition-output-", ".mp4");
@@ -299,6 +345,7 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
             deleteTempFile(thumbnailPath);
             deleteTempFile(outputVideoPath);
             deleteTempFiles(assetPaths.values());
+            releaseActiveJobSlot(jobId);
         }
     }
 
@@ -311,6 +358,8 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
             PublishOptions publishOptions,
             Path thumbnailPath,
             String thumbnailContentType) throws Exception {
+        updateJobState(jobId, VideoJobState.PROCESSING, "Uploading video to YouTube.");
+
         UploadResult uploadResult;
         try {
             uploadResult = uploader.uploadToYouTube(
@@ -328,6 +377,7 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
         String warningMessage = uploadResult.warningMessage();
 
         if (thumbnailPath != null) {
+            updateJobState(jobId, VideoJobState.PROCESSING, "Uploading custom thumbnail.");
             try {
                 uploader.uploadThumbnail(videoId, thumbnailPath.toString(), thumbnailContentType);
             } catch (Exception thumbnailError) {
@@ -436,7 +486,7 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
         jobs.put(jobId, new VideoJobStatus(
                 jobId,
                 VideoJobState.QUEUED,
-                "Job queued.",
+                "Job accepted. Starting shortly.",
                 now,
                 now,
                 publishOptions.privacyStatus(),
@@ -446,6 +496,36 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
                 null,
                 null,
                 null));
+    }
+
+    private void reserveActiveJobSlot(String newJobId) {
+        synchronized (submissionLock) {
+            if (activeJobId == null) {
+                activeJobId = newJobId;
+                return;
+            }
+
+            VideoJobStatus currentActive = jobs.get(activeJobId);
+            if (currentActive == null || isActiveState(currentActive.state())) {
+                throw new JobInProgressException(
+                        activeJobId,
+                        currentActive == null ? VideoJobState.PROCESSING : currentActive.state());
+            }
+
+            activeJobId = newJobId;
+        }
+    }
+
+    private void releaseActiveJobSlot(String jobId) {
+        synchronized (submissionLock) {
+            if (Objects.equals(activeJobId, jobId)) {
+                activeJobId = null;
+            }
+        }
+    }
+
+    private boolean isActiveState(VideoJobState state) {
+        return state == VideoJobState.QUEUED || state == VideoJobState.PROCESSING;
     }
 
     private void trackJobMetrics(PublishOptions publishOptions, boolean hasThumbnail) {

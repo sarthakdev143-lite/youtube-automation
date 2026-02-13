@@ -18,6 +18,7 @@ import github.sarthakdev143.media_factory.model.VideoJobState;
 import github.sarthakdev143.media_factory.model.VideoJobStatus;
 import github.sarthakdev143.media_factory.model.composition.CompositionRenderPlan;
 import github.sarthakdev143.media_factory.service.CompositionRenderer;
+import github.sarthakdev143.media_factory.service.JobInProgressException;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -35,8 +36,11 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -307,6 +311,68 @@ class DefaultVideoProcessingServiceTest {
 
         VideoJobStatus status = service.getJobStatus(jobId).orElseThrow();
         assertThat(status.state()).isEqualTo(VideoJobState.FAILED);
+    }
+
+    @Test
+    void submitJobRejectsWhenAnotherJobIsAlreadyActive() throws Exception {
+        CountDownLatch taskStarted = new CountDownLatch(1);
+        CountDownLatch releaseTask = new CountDownLatch(1);
+        CountDownLatch taskFinished = new CountDownLatch(1);
+
+        TaskExecutor blockingExecutor = task -> {
+            Thread worker = new Thread(() -> {
+                taskStarted.countDown();
+                try {
+                    releaseTask.await(5, TimeUnit.SECONDS);
+                    task.run();
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    taskFinished.countDown();
+                }
+            });
+            worker.start();
+        };
+
+        DefaultVideoProcessingService blockingService = new DefaultVideoProcessingService(
+                youTubeServiceProvider,
+                uploaderFactory,
+                compositionRenderer,
+                blockingExecutor,
+                new SimpleMeterRegistry());
+
+        when(youTubeServiceProvider.getService()).thenReturn(youTubeService);
+        when(uploaderFactory.create(youTubeService)).thenReturn(uploader);
+        when(uploader.uploadToYouTube(anyString(), anyString(), anyString(), any(PublishOptions.class)))
+                .thenReturn(new UploadResult("video-concurrent-1"));
+
+        String firstJobId = blockingService.submitJob(
+                validImage(),
+                validAudio(),
+                60,
+                "Title",
+                "Description",
+                defaultOptions(),
+                null);
+
+        assertThat(taskStarted.await(2, TimeUnit.SECONDS)).isTrue();
+        assertThat(blockingService.getActiveJobStatus()).isPresent();
+        assertThat(blockingService.getActiveJobStatus().orElseThrow().jobId()).isEqualTo(firstJobId);
+
+        assertThatThrownBy(() -> blockingService.submitJob(
+                validImage(),
+                validAudio(),
+                60,
+                "Another title",
+                "Another description",
+                defaultOptions(),
+                null))
+                .isInstanceOf(JobInProgressException.class)
+                .satisfies(throwable -> assertThat(((JobInProgressException) throwable).activeJobId()).isEqualTo(firstJobId));
+
+        releaseTask.countDown();
+        assertThat(taskFinished.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(blockingService.getActiveJobStatus()).isEmpty();
     }
 
     private CompositionManifestRequest validCompositionManifest() {

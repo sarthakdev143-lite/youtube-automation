@@ -102,6 +102,11 @@
             background: var(--accent-hover);
         }
 
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.65;
+        }
+
         .section {
             border: 1px solid var(--border);
             border-radius: 10px;
@@ -291,7 +296,7 @@
             </div>
 
             <div class="full">
-                <button type="submit">Generate & Upload</button>
+                <button type="submit" id="submitButton">Generate & Upload</button>
             </div>
         </div>
     </form>
@@ -307,16 +312,24 @@
     const compositionSection = document.getElementById("compositionSection");
     const sceneList = document.getElementById("sceneList");
     const addSceneButton = document.getElementById("addScene");
+    const submitButton = document.getElementById("submitButton");
+    const activeJobStorageKey = "media-factory.active-job-id";
     let activePoll = null;
+    let isSubmissionLocked = false;
 
     modeSelect.addEventListener("change", syncModeView);
     addSceneButton.addEventListener("click", () => addSceneRow());
 
     syncModeView();
     addSceneRow();
+    restoreActiveJobIfAny();
 
     form.addEventListener("submit", async (event) => {
         event.preventDefault();
+        if (isSubmissionLocked) {
+            return;
+        }
+        setSubmissionLock(true, "Submitting...");
 
         const mode = modeSelect.value;
         const audioFile = document.getElementById("audio").files[0];
@@ -330,6 +343,7 @@
 
         if (!audioFile || !title || !description) {
             status.innerText = "Please provide audio, title, and description.";
+            setSubmissionLock(false);
             return;
         }
 
@@ -366,6 +380,7 @@
             const duration = document.getElementById("duration").value;
             if (!imageFile || !duration) {
                 status.innerText = "Basic mode requires image and duration.";
+                setSubmissionLock(false);
                 return;
             }
 
@@ -376,6 +391,7 @@
             const buildResult = buildCompositionManifest();
             if (buildResult.error) {
                 status.innerText = buildResult.error;
+                setSubmissionLock(false);
                 return;
             }
 
@@ -394,22 +410,32 @@
             });
 
             if (!response.ok) {
+                const contentType = response.headers.get("content-type") || "";
+                if (response.status === 409 && contentType.includes("application/json")) {
+                    const activeJob = await response.json();
+                    renderStatus(activeJob);
+                    pollJobStatus(activeJob.jobId, activeJob);
+                    return;
+                }
                 status.innerText = await response.text();
+                setSubmissionLock(false);
                 return;
             }
 
             const contentType = response.headers.get("content-type") || "";
             if (!contentType.includes("application/json")) {
                 status.innerText = await response.text();
+                setSubmissionLock(false);
                 return;
             }
 
             const submission = await response.json();
             status.innerText = `Job ${submission.jobId}: ${submission.state}. ${submission.message}`;
-            pollJobStatus(submission.jobId);
+            pollJobStatus(submission.jobId, submission);
         } catch (error) {
             console.error(error);
             status.innerText = "Error: " + error.message;
+            setSubmissionLock(false);
         }
     });
 
@@ -440,7 +466,7 @@
                 </div>
                 <div>
                     <label>Asset File</label>
-                    <input type="file" class="scene-asset" required>
+                    <input type="file" class="scene-asset">
                 </div>
                 <div class="scene-image-only">
                     <label>Image Duration (sec)</label>
@@ -700,9 +726,43 @@
         status.innerText = message;
     }
 
-    function pollJobStatus(jobId) {
+    function setSubmissionLock(locked, label) {
+        isSubmissionLocked = locked;
+        submitButton.disabled = locked;
+        submitButton.innerText = locked ? (label || "Processing...") : "Generate & Upload";
+    }
+
+    function clearActivePolling() {
         if (activePoll) {
             clearInterval(activePoll);
+            activePoll = null;
+        }
+    }
+
+    function isTerminalState(state) {
+        return state === "COMPLETED" || state === "FAILED";
+    }
+
+    function persistActiveJobId(jobId) {
+        if (!jobId) {
+            localStorage.removeItem(activeJobStorageKey);
+            return;
+        }
+        localStorage.setItem(activeJobStorageKey, jobId);
+    }
+
+    function pollJobStatus(jobId, initialJob) {
+        clearActivePolling();
+        persistActiveJobId(jobId);
+        setSubmissionLock(true, "Processing...");
+
+        if (initialJob) {
+            renderStatus(initialJob);
+            if (isTerminalState(initialJob.state)) {
+                persistActiveJobId(null);
+                setSubmissionLock(false);
+                return;
+            }
         }
 
         activePoll = setInterval(async () => {
@@ -710,24 +770,45 @@
                 const response = await fetch(`/api/video/status/${jobId}`);
                 if (!response.ok) {
                     status.innerText = await response.text();
-                    clearInterval(activePoll);
-                    activePoll = null;
+                    clearActivePolling();
+                    persistActiveJobId(null);
+                    setSubmissionLock(false);
                     return;
                 }
 
                 const job = await response.json();
                 renderStatus(job);
 
-                if (job.state === "COMPLETED" || job.state === "FAILED") {
-                    clearInterval(activePoll);
-                    activePoll = null;
+                if (isTerminalState(job.state)) {
+                    clearActivePolling();
+                    persistActiveJobId(null);
+                    setSubmissionLock(false);
                 }
             } catch (error) {
-                status.innerText = "Status check failed: " + error.message;
-                clearInterval(activePoll);
-                activePoll = null;
+                status.innerText = "Status check failed: " + error.message + ". Retrying...";
             }
         }, 3000);
+    }
+
+    async function restoreActiveJobIfAny() {
+        setSubmissionLock(false);
+
+        try {
+            const activeResponse = await fetch("/api/video/status/active");
+            if (activeResponse.ok) {
+                const activeJob = await activeResponse.json();
+                pollJobStatus(activeJob.jobId, activeJob);
+                return;
+            }
+        } catch (error) {
+            console.error("Failed to restore active job from server", error);
+        }
+
+        const storedJobId = localStorage.getItem(activeJobStorageKey);
+        if (!storedJobId) {
+            return;
+        }
+        pollJobStatus(storedJobId);
     }
 </script>
 

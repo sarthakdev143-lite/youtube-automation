@@ -128,9 +128,18 @@ Successful response for both submit endpoints: `202 Accepted`
 }
 ```
 
+If another job is already in progress, submit endpoints return `409 Conflict` with the active job details so the client can resume polling that job instead of creating a duplicate upload.
+
 ### Check Job Status
 
 `GET /api/video/status/{jobId}`
+
+### Check Active Job Status
+
+`GET /api/video/status/active`
+
+- `200 OK` with job payload when a job is currently `QUEUED` or `PROCESSING`
+- `204 No Content` when there is no active job
 
 Successful response: `200 OK`
 

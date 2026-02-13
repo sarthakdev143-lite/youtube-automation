@@ -16,7 +16,9 @@ import github.sarthakdev143.media_factory.model.PublishOptions;
 import github.sarthakdev143.media_factory.model.SceneType;
 import github.sarthakdev143.media_factory.model.TransitionType;
 import github.sarthakdev143.media_factory.model.VideoJobState;
+import github.sarthakdev143.media_factory.model.VideoJobStatus;
 import github.sarthakdev143.media_factory.model.VisualFilterType;
+import github.sarthakdev143.media_factory.service.JobInProgressException;
 import github.sarthakdev143.media_factory.service.VideoProcessingService;
 import github.sarthakdev143.media_factory.service.impl.CompositionManifestValidator;
 import org.slf4j.Logger;
@@ -107,6 +109,8 @@ public class VideoController {
                             jobId,
                             VideoJobState.QUEUED,
                             "Video job accepted. Poll /api/video/status/{jobId} for progress."));
+        } catch (JobInProgressException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(toConflictResponse(e));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body("Invalid request: " + e.getMessage());
         } catch (Exception e) {
@@ -156,6 +160,8 @@ public class VideoController {
                             jobId,
                             VideoJobState.QUEUED,
                             "Composition job accepted. Poll /api/video/status/{jobId} for progress."));
+        } catch (JobInProgressException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(toConflictResponse(e));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body("Invalid request: " + e.getMessage());
         } catch (Exception e) {
@@ -170,6 +176,23 @@ public class VideoController {
         return videoProcessingService.getJobStatus(jobId)
                 .<ResponseEntity<?>>map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).body("Job not found for id: " + jobId));
+    }
+
+    @GetMapping("/status/active")
+    public ResponseEntity<?> getActiveStatus() {
+        return videoProcessingService.getActiveJobStatus()
+                .<ResponseEntity<?>>map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.noContent().build());
+    }
+
+    private VideoJobSubmissionResponse toConflictResponse(JobInProgressException exception) {
+        String activeJobId = exception.activeJobId();
+        VideoJobStatus activeJob = videoProcessingService.getJobStatus(activeJobId).orElse(null);
+        VideoJobState state = activeJob == null ? exception.activeJobState() : activeJob.state();
+        String message = activeJob == null
+                ? "Another video job is already running. Wait for it to finish."
+                : activeJob.message();
+        return new VideoJobSubmissionResponse(activeJobId, state, message);
     }
 
     private CompositionManifestRequest parseManifest(String manifestJson) {
