@@ -1,9 +1,12 @@
 package github.sarthakdev143.media_factory.controller;
 
 import github.sarthakdev143.media_factory.dto.CompositionCaptionRequest;
+import github.sarthakdev143.media_factory.dto.CompositionColorGradeRequest;
 import github.sarthakdev143.media_factory.dto.CompositionManifestRequest;
+import github.sarthakdev143.media_factory.dto.CompositionOverlayRequest;
 import github.sarthakdev143.media_factory.dto.CompositionSceneRequest;
 import github.sarthakdev143.media_factory.dto.CompositionTransitionRequest;
+import github.sarthakdev143.media_factory.dto.CompositionVisualEditRequest;
 import github.sarthakdev143.media_factory.dto.VideoJobSubmissionResponse;
 import github.sarthakdev143.media_factory.model.CaptionPosition;
 import github.sarthakdev143.media_factory.model.MotionType;
@@ -13,6 +16,7 @@ import github.sarthakdev143.media_factory.model.PublishOptions;
 import github.sarthakdev143.media_factory.model.SceneType;
 import github.sarthakdev143.media_factory.model.TransitionType;
 import github.sarthakdev143.media_factory.model.VideoJobState;
+import github.sarthakdev143.media_factory.model.VisualFilterType;
 import github.sarthakdev143.media_factory.service.VideoProcessingService;
 import github.sarthakdev143.media_factory.service.impl.CompositionManifestValidator;
 import org.slf4j.Logger;
@@ -205,6 +209,7 @@ public class VideoController {
 
             CompositionCaptionRequest caption = parseCaption(path, sceneMap.get("caption"));
             CompositionTransitionRequest transition = parseTransition(path, sceneMap.get("transition"));
+            CompositionVisualEditRequest visualEdit = parseVisualEdit(path, sceneMap.get("visualEdit"));
 
             scenes.add(new CompositionSceneRequest(
                     asNullableString(sceneMap.get("assetId")),
@@ -214,7 +219,8 @@ public class VideoController {
                     asNullableDouble(sceneMap.get("clipDurationSec"), path + ".clipDurationSec"),
                     parseOptionalEnum(MotionType.class, sceneMap.get("motion"), path + ".motion"),
                     caption,
-                    transition));
+                    transition,
+                    visualEdit));
         }
 
         return new CompositionManifestRequest(outputPreset, scenes);
@@ -250,6 +256,53 @@ public class VideoController {
         return new CompositionTransitionRequest(
                 parseOptionalEnum(TransitionType.class, transition.get("type"), scenePath + ".transition.type"),
                 asNullableDouble(transition.get("transitionDurationSec"), scenePath + ".transition.transitionDurationSec"));
+    }
+
+    @SuppressWarnings("unchecked")
+    private CompositionVisualEditRequest parseVisualEdit(String scenePath, Object visualEditValue) {
+        if (visualEditValue == null) {
+            return null;
+        }
+        if (!(visualEditValue instanceof Map<?, ?> visualEditRaw)) {
+            throw new IllegalArgumentException(scenePath + ".visualEdit must be an object.");
+        }
+
+        Map<String, Object> visualEdit = (Map<String, Object>) visualEditRaw;
+        return new CompositionVisualEditRequest(
+                parseOptionalEnum(VisualFilterType.class, visualEdit.get("filter"), scenePath + ".visualEdit.filter"),
+                parseColorGrade(scenePath, visualEdit.get("colorGrade")),
+                parseOverlay(scenePath, visualEdit.get("overlay")));
+    }
+
+    @SuppressWarnings("unchecked")
+    private CompositionColorGradeRequest parseColorGrade(String scenePath, Object colorGradeValue) {
+        if (colorGradeValue == null) {
+            return null;
+        }
+        if (!(colorGradeValue instanceof Map<?, ?> colorGradeRaw)) {
+            throw new IllegalArgumentException(scenePath + ".visualEdit.colorGrade must be an object.");
+        }
+
+        Map<String, Object> colorGrade = (Map<String, Object>) colorGradeRaw;
+        return new CompositionColorGradeRequest(
+                asNullableDouble(colorGrade.get("brightness"), scenePath + ".visualEdit.colorGrade.brightness"),
+                asNullableDouble(colorGrade.get("contrast"), scenePath + ".visualEdit.colorGrade.contrast"),
+                asNullableDouble(colorGrade.get("saturation"), scenePath + ".visualEdit.colorGrade.saturation"));
+    }
+
+    @SuppressWarnings("unchecked")
+    private CompositionOverlayRequest parseOverlay(String scenePath, Object overlayValue) {
+        if (overlayValue == null) {
+            return null;
+        }
+        if (!(overlayValue instanceof Map<?, ?> overlayRaw)) {
+            throw new IllegalArgumentException(scenePath + ".visualEdit.overlay must be an object.");
+        }
+
+        Map<String, Object> overlay = (Map<String, Object>) overlayRaw;
+        return new CompositionOverlayRequest(
+                asNullableString(overlay.get("hexColor")),
+                asNullableDouble(overlay.get("opacity"), scenePath + ".visualEdit.overlay.opacity"));
     }
 
     private String asNullableString(Object value) {

@@ -1,12 +1,16 @@
 package github.sarthakdev143.media_factory.service.impl;
 
+import github.sarthakdev143.media_factory.dto.CompositionColorGradeRequest;
 import github.sarthakdev143.media_factory.dto.CompositionManifestRequest;
+import github.sarthakdev143.media_factory.dto.CompositionOverlayRequest;
 import github.sarthakdev143.media_factory.dto.CompositionSceneRequest;
 import github.sarthakdev143.media_factory.dto.CompositionTransitionRequest;
+import github.sarthakdev143.media_factory.dto.CompositionVisualEditRequest;
 import github.sarthakdev143.media_factory.model.MotionType;
 import github.sarthakdev143.media_factory.model.OutputPreset;
 import github.sarthakdev143.media_factory.model.SceneType;
 import github.sarthakdev143.media_factory.model.TransitionType;
+import github.sarthakdev143.media_factory.model.VisualFilterType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockMultipartFile;
@@ -41,6 +45,7 @@ class CompositionManifestValidatorTest {
                                 null,
                                 null,
                                 null,
+                                null,
                                 null),
                         new CompositionSceneRequest(
                                 "scene-video",
@@ -50,7 +55,8 @@ class CompositionManifestValidatorTest {
                                 5.0,
                                 MotionType.PAN_LEFT,
                                 null,
-                                new CompositionTransitionRequest(TransitionType.CROSSFADE, 0.7))));
+                                new CompositionTransitionRequest(TransitionType.CROSSFADE, 0.7),
+                                null)));
 
         CompositionManifestRequest normalized = validator.normalizeAndValidate(manifest, validAssets());
 
@@ -81,6 +87,7 @@ class CompositionManifestValidatorTest {
                         null,
                         MotionType.NONE,
                         null,
+                        null,
                         null)));
 
         assertThatThrownBy(() -> validator.normalizeAndValidate(manifest, Map.of()))
@@ -100,7 +107,8 @@ class CompositionManifestValidatorTest {
                         null,
                         MotionType.NONE,
                         null,
-                        new CompositionTransitionRequest(TransitionType.CROSSFADE, 0.3))));
+                        new CompositionTransitionRequest(TransitionType.CROSSFADE, 0.3),
+                        null)));
 
         assertThatThrownBy(() -> validator.normalizeAndValidate(manifest, validAssets()))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -120,6 +128,7 @@ class CompositionManifestValidatorTest {
                                 20001.0,
                                 MotionType.NONE,
                                 null,
+                                null,
                                 null),
                         new CompositionSceneRequest(
                                 "scene-video-2",
@@ -129,11 +138,61 @@ class CompositionManifestValidatorTest {
                                 20001.0,
                                 MotionType.NONE,
                                 null,
-                                new CompositionTransitionRequest(TransitionType.CUT, null))));
+                                new CompositionTransitionRequest(TransitionType.CUT, null),
+                                null)));
 
         assertThatThrownBy(() -> validator.normalizeAndValidate(manifest, validLongVideoAssets()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Total timeline duration must be less than or equal to 36000 seconds");
+    }
+
+    @Test
+    void normalizeAndValidateAppliesVisualEditDefaultsWhenOmitted() {
+        CompositionManifestRequest manifest = new CompositionManifestRequest(
+                OutputPreset.LANDSCAPE_16_9,
+                List.of(new CompositionSceneRequest(
+                        "scene-image",
+                        SceneType.IMAGE,
+                        3.0,
+                        null,
+                        null,
+                        MotionType.NONE,
+                        null,
+                        null,
+                        null)));
+
+        CompositionManifestRequest normalized = validator.normalizeAndValidate(manifest, validAssets());
+        CompositionVisualEditRequest visualEdit = normalized.scenes().get(0).visualEdit();
+
+        assertThat(visualEdit).isNotNull();
+        assertThat(visualEdit.filter()).isEqualTo(VisualFilterType.NONE);
+        assertThat(visualEdit.colorGrade().brightness()).isEqualTo(0.0);
+        assertThat(visualEdit.colorGrade().contrast()).isEqualTo(1.0);
+        assertThat(visualEdit.colorGrade().saturation()).isEqualTo(1.0);
+        assertThat(visualEdit.overlay()).isNull();
+    }
+
+    @Test
+    void normalizeAndValidateRejectsInvalidOverlayColor() {
+        CompositionManifestRequest manifest = new CompositionManifestRequest(
+                OutputPreset.LANDSCAPE_16_9,
+                List.of(new CompositionSceneRequest(
+                        "scene-image",
+                        SceneType.IMAGE,
+                        3.0,
+                        null,
+                        null,
+                        MotionType.NONE,
+                        null,
+                        null,
+                        new CompositionVisualEditRequest(
+                                VisualFilterType.SEPIA,
+                                new CompositionColorGradeRequest(0.1, 1.2, 1.1),
+                                new CompositionOverlayRequest("blue", 0.3)))));
+
+        assertThatThrownBy(() -> validator.normalizeAndValidate(manifest, validAssets()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("visualEdit.overlay.hexColor must match #RRGGBB");
     }
 
     private Map<String, MultipartFile> validAssets() {

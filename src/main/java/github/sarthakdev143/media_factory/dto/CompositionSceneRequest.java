@@ -11,5 +11,6 @@ public record CompositionSceneRequest(
         Double clipDurationSec,
         MotionType motion,
         CompositionCaptionRequest caption,
-        CompositionTransitionRequest transition) {
+        CompositionTransitionRequest transition,
+        CompositionVisualEditRequest visualEdit) {
 }

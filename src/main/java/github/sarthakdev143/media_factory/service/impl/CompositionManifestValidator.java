@@ -1,13 +1,17 @@
 package github.sarthakdev143.media_factory.service.impl;
 
 import github.sarthakdev143.media_factory.dto.CompositionCaptionRequest;
+import github.sarthakdev143.media_factory.dto.CompositionColorGradeRequest;
 import github.sarthakdev143.media_factory.dto.CompositionManifestRequest;
+import github.sarthakdev143.media_factory.dto.CompositionOverlayRequest;
 import github.sarthakdev143.media_factory.dto.CompositionSceneRequest;
 import github.sarthakdev143.media_factory.dto.CompositionTransitionRequest;
+import github.sarthakdev143.media_factory.dto.CompositionVisualEditRequest;
 import github.sarthakdev143.media_factory.model.CaptionPosition;
 import github.sarthakdev143.media_factory.model.MotionType;
 import github.sarthakdev143.media_factory.model.SceneType;
 import github.sarthakdev143.media_factory.model.TransitionType;
+import github.sarthakdev143.media_factory.model.VisualFilterType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -35,8 +39,21 @@ public class CompositionManifestValidator {
     private static final double MAX_TOTAL_DURATION_SECONDS = 10.0 * 60.0 * 60.0;
     private static final double MIN_CROSSFADE_DURATION_SECONDS = 0.2;
     private static final double MAX_CROSSFADE_DURATION_SECONDS = 2.0;
+    private static final double MIN_BRIGHTNESS = -1.0;
+    private static final double MAX_BRIGHTNESS = 1.0;
+    private static final double MIN_CONTRAST = 0.2;
+    private static final double MAX_CONTRAST = 3.0;
+    private static final double MIN_SATURATION = 0.0;
+    private static final double MAX_SATURATION = 3.0;
+    private static final double MIN_OVERLAY_OPACITY = 0.0;
+    private static final double MAX_OVERLAY_OPACITY = 1.0;
+    private static final double DEFAULT_BRIGHTNESS = 0.0;
+    private static final double DEFAULT_CONTRAST = 1.0;
+    private static final double DEFAULT_SATURATION = 1.0;
+    private static final double DEFAULT_OVERLAY_OPACITY = 0.25;
     private static final double EPSILON = 1e-9;
     private static final Pattern DURATION_PATTERN = Pattern.compile("Duration: (\\d+):(\\d+):(\\d+(?:\\.\\d+)?)");
+    private static final Pattern HEX_COLOR_PATTERN = Pattern.compile("^#[0-9a-fA-F]{6}$");
     private static final String FFMPEG_PATH_ENV = "FFMPEG_PATH";
     private static final String DEFAULT_FFMPEG_BINARY = "ffmpeg";
 
@@ -89,6 +106,7 @@ public class CompositionManifestValidator {
                     scene.transition(),
                     previousSceneDuration,
                     sceneDurationSeconds);
+            CompositionVisualEditRequest visualEdit = normalizeVisualEdit(index, scene.visualEdit());
 
             totalDurationSeconds += sceneDurationSeconds;
             if (transition.type() == TransitionType.CROSSFADE) {
@@ -104,7 +122,8 @@ public class CompositionManifestValidator {
                         null,
                         motion,
                         caption,
-                        transition));
+                        transition,
+                        visualEdit));
             } else {
                 normalizedScenes.add(new CompositionSceneRequest(
                         assetId,
@@ -114,7 +133,8 @@ public class CompositionManifestValidator {
                         sceneDurationSeconds,
                         motion,
                         caption,
-                        transition));
+                        transition,
+                        visualEdit));
             }
 
             previousSceneDuration = sceneDurationSeconds;
@@ -280,6 +300,80 @@ public class CompositionManifestValidator {
         return new CompositionTransitionRequest(TransitionType.CROSSFADE, transitionDuration);
     }
 
+    private CompositionVisualEditRequest normalizeVisualEdit(
+            int index,
+            CompositionVisualEditRequest visualEdit) {
+        VisualFilterType filter = visualEdit == null || visualEdit.filter() == null
+                ? VisualFilterType.NONE
+                : visualEdit.filter();
+        CompositionColorGradeRequest colorGrade = normalizeColorGrade(
+                index,
+                visualEdit == null ? null : visualEdit.colorGrade());
+        CompositionOverlayRequest overlay = normalizeOverlay(
+                index,
+                visualEdit == null ? null : visualEdit.overlay());
+
+        return new CompositionVisualEditRequest(filter, colorGrade, overlay);
+    }
+
+    private CompositionColorGradeRequest normalizeColorGrade(
+            int index,
+            CompositionColorGradeRequest colorGrade) {
+        String prefix = "manifest.scenes[" + index + "].visualEdit.colorGrade.";
+        double brightness = valueInRangeOrDefault(
+                colorGrade == null ? null : colorGrade.brightness(),
+                DEFAULT_BRIGHTNESS,
+                MIN_BRIGHTNESS,
+                MAX_BRIGHTNESS,
+                prefix + "brightness");
+        double contrast = valueInRangeOrDefault(
+                colorGrade == null ? null : colorGrade.contrast(),
+                DEFAULT_CONTRAST,
+                MIN_CONTRAST,
+                MAX_CONTRAST,
+                prefix + "contrast");
+        double saturation = valueInRangeOrDefault(
+                colorGrade == null ? null : colorGrade.saturation(),
+                DEFAULT_SATURATION,
+                MIN_SATURATION,
+                MAX_SATURATION,
+                prefix + "saturation");
+
+        return new CompositionColorGradeRequest(brightness, contrast, saturation);
+    }
+
+    private CompositionOverlayRequest normalizeOverlay(
+            int index,
+            CompositionOverlayRequest overlay) {
+        if (overlay == null) {
+            return null;
+        }
+
+        String colorField = "manifest.scenes[" + index + "].visualEdit.overlay.hexColor";
+        if (overlay.hexColor() == null || overlay.hexColor().isBlank()) {
+            throw new IllegalArgumentException(colorField + " is required when overlay is provided.");
+        }
+
+        String normalizedHexColor = overlay.hexColor().trim();
+        if (!HEX_COLOR_PATTERN.matcher(normalizedHexColor).matches()) {
+            throw new IllegalArgumentException(colorField + " must match #RRGGBB.");
+        }
+
+        String opacityField = "manifest.scenes[" + index + "].visualEdit.overlay.opacity";
+        double opacity = valueInRangeOrDefault(
+                overlay.opacity(),
+                DEFAULT_OVERLAY_OPACITY,
+                MIN_OVERLAY_OPACITY,
+                MAX_OVERLAY_OPACITY,
+                opacityField);
+
+        if (opacity <= EPSILON) {
+            return null;
+        }
+
+        return new CompositionOverlayRequest(normalizedHexColor.toUpperCase(Locale.ROOT), opacity);
+    }
+
     private void validateContentType(int index, SceneType type, String contentType, String prefix) {
         String normalizedContentType = contentType == null ? "" : contentType.toLowerCase(Locale.ROOT);
         if (!normalizedContentType.startsWith(prefix)) {
@@ -308,6 +402,29 @@ public class CompositionManifestValidator {
             throw new IllegalArgumentException(fieldName + " must be a finite number.");
         }
         return value;
+    }
+
+    private double valueInRangeOrDefault(
+            Double value,
+            double defaultValue,
+            double minValue,
+            double maxValue,
+            String fieldName) {
+        if (value == null) {
+            return defaultValue;
+        }
+
+        double normalized = requireFinite(value, fieldName);
+        if (normalized < minValue || normalized > maxValue) {
+            throw new IllegalArgumentException(
+                    fieldName
+                            + " must be between "
+                            + minValue
+                            + " and "
+                            + maxValue
+                            + ".");
+        }
+        return normalized;
     }
 
     private double probeVideoDurationSeconds(MultipartFile asset, int sceneIndex) {

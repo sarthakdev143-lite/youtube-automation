@@ -4,9 +4,13 @@ import github.sarthakdev143.media_factory.model.CaptionPosition;
 import github.sarthakdev143.media_factory.model.MotionType;
 import github.sarthakdev143.media_factory.model.SceneType;
 import github.sarthakdev143.media_factory.model.TransitionType;
+import github.sarthakdev143.media_factory.model.VisualFilterType;
 import github.sarthakdev143.media_factory.model.composition.CompositionCaptionPlan;
+import github.sarthakdev143.media_factory.model.composition.CompositionColorGradePlan;
+import github.sarthakdev143.media_factory.model.composition.CompositionOverlayPlan;
 import github.sarthakdev143.media_factory.model.composition.CompositionRenderPlan;
 import github.sarthakdev143.media_factory.model.composition.CompositionScenePlan;
+import github.sarthakdev143.media_factory.model.composition.CompositionVisualEditPlan;
 import github.sarthakdev143.media_factory.service.CompositionRenderer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,6 +34,7 @@ public class FfmpegCompositionRenderer implements CompositionRenderer {
     private static final String FFMPEG_PATH_ENV = "FFMPEG_PATH";
     private static final String DEFAULT_FFMPEG_BINARY = "ffmpeg";
     private static final double CUT_TRANSITION_DURATION_SECONDS = 0.001;
+    private static final double EPSILON = 1e-9;
 
     @Override
     public void renderComposition(CompositionRenderPlan plan, Path outputVideoPath) throws IOException, InterruptedException {
@@ -272,11 +277,33 @@ public class FfmpegCompositionRenderer implements CompositionRenderer {
             filters.add(buildMotionFilter(scene.motion(), scene.durationSec(), width, height));
         }
 
+        appendVisualEditFilters(scene.visualEdit(), filters);
+
         if (scene.caption() != null) {
             filters.add(buildCaptionFilter(scene.caption(), width, height));
         }
 
         return String.join(",", filters);
+    }
+
+    private void appendVisualEditFilters(CompositionVisualEditPlan visualEdit, List<String> filters) {
+        if (visualEdit == null) {
+            return;
+        }
+
+        if (visualEdit.filter() != null && visualEdit.filter() != VisualFilterType.NONE) {
+            filters.add(buildFilterPresetExpression(visualEdit.filter()));
+        }
+
+        CompositionColorGradePlan colorGrade = visualEdit.colorGrade();
+        if (colorGrade != null && hasColorGradeAdjustments(colorGrade)) {
+            filters.add(buildColorGradeExpression(colorGrade));
+        }
+
+        CompositionOverlayPlan overlay = visualEdit.overlay();
+        if (overlay != null && overlay.opacity() > EPSILON) {
+            filters.add(buildOverlayExpression(overlay));
+        }
     }
 
     private String buildMotionFilter(MotionType motion, double durationSeconds, int width, int height) {
@@ -292,6 +319,41 @@ public class FfmpegCompositionRenderer implements CompositionRenderer {
                     + "y='ih/2-(ih/zoom/2)':d=1:fps=30:s=" + width + "x" + height;
             case NONE -> "";
         };
+    }
+
+    private boolean hasColorGradeAdjustments(CompositionColorGradePlan colorGrade) {
+        return Math.abs(colorGrade.brightness()) > EPSILON
+                || Math.abs(colorGrade.contrast() - 1.0) > EPSILON
+                || Math.abs(colorGrade.saturation() - 1.0) > EPSILON;
+    }
+
+    private String buildColorGradeExpression(CompositionColorGradePlan colorGrade) {
+        return "eq=brightness="
+                + formatDecimal(colorGrade.brightness())
+                + ":contrast="
+                + formatDecimal(colorGrade.contrast())
+                + ":saturation="
+                + formatDecimal(colorGrade.saturation());
+    }
+
+    private String buildFilterPresetExpression(VisualFilterType filter) {
+        return switch (filter) {
+            case GRAYSCALE -> "hue=s=0";
+            case SEPIA -> "colorchannelmixer=.393:.769:.189:.349:.686:.168:.272:.534:.131";
+            case COOL -> "colorbalance=rs=-0.05:gs=0.00:bs=0.08";
+            case WARM -> "colorbalance=rs=0.08:gs=0.03:bs=-0.03";
+            case NONE -> "";
+        };
+    }
+
+    private String buildOverlayExpression(CompositionOverlayPlan overlay) {
+        String hexColor = overlay.hexColor();
+        String ffmpegColor = hexColor.startsWith("#") ? "0x" + hexColor.substring(1) : hexColor;
+        return "drawbox=x=0:y=0:w=iw:h=ih:color="
+                + ffmpegColor
+                + "@"
+                + formatDecimal(overlay.opacity())
+                + ":t=fill";
     }
 
     private String buildCaptionFilter(CompositionCaptionPlan caption, int width, int height) {
@@ -351,6 +413,10 @@ public class FfmpegCompositionRenderer implements CompositionRenderer {
 
     private String formatSeconds(double seconds) {
         return String.format(Locale.ROOT, "%.3f", seconds);
+    }
+
+    private String formatDecimal(double value) {
+        return String.format(Locale.ROOT, "%.3f", value);
     }
 
     private String resolveFfmpegBinary() {

@@ -378,7 +378,8 @@ class VideoControllerTest {
                         null,
                         MotionType.ZOOM_IN,
                         new CompositionCaptionRequest("hello", 0.0, 1.5, github.sarthakdev143.media_factory.model.CaptionPosition.BOTTOM),
-                        new CompositionTransitionRequest(TransitionType.CUT, null))));
+                        new CompositionTransitionRequest(TransitionType.CUT, null),
+                        null)));
     }
 
     private String validManifestJson() {

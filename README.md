@@ -88,6 +88,15 @@ Manifest schema:
 - `IMAGE` scenes require `durationSec` (`0.5` to `600`)
 - `VIDEO` scenes support `clipStartSec` (default `0`) and optional `clipDurationSec` (`>0`)
 - optional `motion`: `NONE | ZOOM_IN | ZOOM_OUT | PAN_LEFT | PAN_RIGHT`
+- optional `visualEdit`:
+  - `filter`: `NONE | GRAYSCALE | SEPIA | COOL | WARM`
+  - `colorGrade`:
+    - `brightness`: `-1.0` to `1.0` (default `0.0`)
+    - `contrast`: `0.2` to `3.0` (default `1.0`)
+    - `saturation`: `0.0` to `3.0` (default `1.0`)
+  - optional `overlay`:
+    - `hexColor`: `#RRGGBB`
+    - `opacity`: `0.0` to `1.0` (default `0.25`, values `<=0` disable overlay)
 - optional `caption`:
   - `text`
   - `startOffsetSec`
@@ -174,6 +183,11 @@ curl -X POST "http://localhost:8080/api/video/compositions" \
         "type":"IMAGE",
         "durationSec":3,
         "motion":"ZOOM_IN",
+        "visualEdit":{
+          "filter":"WARM",
+          "colorGrade":{"brightness":0.08,"contrast":1.15,"saturation":1.2},
+          "overlay":{"hexColor":"#2E1C12","opacity":0.12}
+        },
         "transition":{"type":"CUT"},
         "caption":{"text":"Intro","startOffsetSec":0,"endOffsetSec":2,"position":"BOTTOM"}
       },
@@ -204,6 +218,7 @@ curl "http://localhost:8080/api/video/status/<jobId>"
 
 - One master audio track per job (`audio` field)
 - No scene-level audio mixing in this phase
+- Overlay currently supports full-frame color tint only (no per-scene image watermark layer yet)
 - Jobs are stored in memory (not persisted)
 
 ## Tests

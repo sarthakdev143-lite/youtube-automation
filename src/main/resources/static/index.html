@@ -200,7 +200,7 @@
 <body>
 <div class="card">
     <h2>Media Factory</h2>
-    <p class="subtitle">Create a simple video from one image or build a multi-scene composition with mixed assets.</p>
+    <p class="subtitle">Create a simple video from one image or build a multi-scene composition with mixed assets, filters, overlays, and color grading.</p>
 
     <form id="videoForm">
         <div class="grid">
@@ -465,6 +465,36 @@
                     </select>
                 </div>
                 <div>
+                    <label>Filter</label>
+                    <select class="scene-filter">
+                        <option value="NONE" selected>NONE</option>
+                        <option value="GRAYSCALE">GRAYSCALE</option>
+                        <option value="SEPIA">SEPIA</option>
+                        <option value="COOL">COOL</option>
+                        <option value="WARM">WARM</option>
+                    </select>
+                </div>
+                <div>
+                    <label>Brightness (-1 to 1)</label>
+                    <input type="number" min="-1" max="1" step="0.05" class="scene-brightness" value="0">
+                </div>
+                <div>
+                    <label>Contrast (0.2 to 3)</label>
+                    <input type="number" min="0.2" max="3" step="0.05" class="scene-contrast" value="1">
+                </div>
+                <div>
+                    <label>Saturation (0 to 3)</label>
+                    <input type="number" min="0" max="3" step="0.05" class="scene-saturation" value="1">
+                </div>
+                <div>
+                    <label>Overlay Tint Color</label>
+                    <input type="color" class="scene-overlay-color" value="#000000">
+                </div>
+                <div>
+                    <label>Overlay Opacity (0 to 1)</label>
+                    <input type="number" min="0" max="1" step="0.05" class="scene-overlay-opacity" value="0">
+                </div>
+                <div>
                     <label>Transition</label>
                     <select class="scene-transition-type">
                         <option value="CUT" selected>CUT</option>
@@ -613,6 +643,12 @@
             const captionStart = row.querySelector(".scene-caption-start").value;
             const captionEnd = row.querySelector(".scene-caption-end").value;
             const captionPosition = row.querySelector(".scene-caption-position").value;
+            const filter = row.querySelector(".scene-filter").value;
+            const brightness = Number(row.querySelector(".scene-brightness").value || 0);
+            const contrast = Number(row.querySelector(".scene-contrast").value || 1);
+            const saturation = Number(row.querySelector(".scene-saturation").value || 1);
+            const overlayColor = row.querySelector(".scene-overlay-color").value;
+            const overlayOpacity = Number(row.querySelector(".scene-overlay-opacity").value || 0);
 
             if (captionText) {
                 scene.caption = {
@@ -623,6 +659,22 @@
                 if (captionEnd) {
                     scene.caption.endOffsetSec = Number(captionEnd);
                 }
+            }
+
+            scene.visualEdit = {
+                filter,
+                colorGrade: {
+                    brightness,
+                    contrast,
+                    saturation,
+                },
+            };
+
+            if (overlayOpacity > 0) {
+                scene.visualEdit.overlay = {
+                    hexColor: overlayColor,
+                    opacity: overlayOpacity,
+                };
             }
 
             scenes.push(scene);

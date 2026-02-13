@@ -10,5 +10,6 @@ public record CompositionScenePlan(
         double clipStartSec,
         MotionType motion,
         CompositionCaptionPlan caption,
-        CompositionTransitionPlan transition) {
+        CompositionTransitionPlan transition,
+        CompositionVisualEditPlan visualEdit) {
 }

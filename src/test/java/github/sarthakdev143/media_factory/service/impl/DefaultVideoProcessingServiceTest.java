@@ -320,7 +320,8 @@ class DefaultVideoProcessingServiceTest {
                         null,
                         MotionType.ZOOM_IN,
                         null,
-                        new CompositionTransitionRequest(TransitionType.CUT, null))));
+                        new CompositionTransitionRequest(TransitionType.CUT, null),
+                        null)));
     }
 
     private Map<String, MultipartFile> validAssets() {

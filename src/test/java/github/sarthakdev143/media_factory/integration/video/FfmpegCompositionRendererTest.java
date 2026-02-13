@@ -4,9 +4,13 @@ import github.sarthakdev143.media_factory.model.CaptionPosition;
 import github.sarthakdev143.media_factory.model.MotionType;
 import github.sarthakdev143.media_factory.model.SceneType;
 import github.sarthakdev143.media_factory.model.TransitionType;
+import github.sarthakdev143.media_factory.model.VisualFilterType;
 import github.sarthakdev143.media_factory.model.composition.CompositionCaptionPlan;
+import github.sarthakdev143.media_factory.model.composition.CompositionColorGradePlan;
+import github.sarthakdev143.media_factory.model.composition.CompositionOverlayPlan;
 import github.sarthakdev143.media_factory.model.composition.CompositionScenePlan;
 import github.sarthakdev143.media_factory.model.composition.CompositionTransitionPlan;
+import github.sarthakdev143.media_factory.model.composition.CompositionVisualEditPlan;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;
@@ -27,7 +31,8 @@ class FfmpegCompositionRendererTest {
                 0.0,
                 MotionType.ZOOM_IN,
                 new CompositionCaptionPlan("Hello world", 0.0, 2.0, CaptionPosition.BOTTOM),
-                new CompositionTransitionPlan(TransitionType.CUT, 0.0));
+                new CompositionTransitionPlan(TransitionType.CUT, 0.0),
+                null);
 
         List<String> command = renderer.buildImageSceneCommand(
                 scene,
@@ -50,7 +55,8 @@ class FfmpegCompositionRendererTest {
                 2.0,
                 MotionType.NONE,
                 null,
-                new CompositionTransitionPlan(TransitionType.CUT, 0.0));
+                new CompositionTransitionPlan(TransitionType.CUT, 0.0),
+                null);
 
         List<String> command = renderer.buildVideoSceneCommand(
                 scene,
@@ -86,7 +92,8 @@ class FfmpegCompositionRendererTest {
                         0.0,
                         MotionType.NONE,
                         null,
-                        new CompositionTransitionPlan(TransitionType.CUT, 0.0)),
+                        new CompositionTransitionPlan(TransitionType.CUT, 0.0),
+                        null),
                 new CompositionScenePlan(
                         "b",
                         SceneType.IMAGE,
@@ -94,7 +101,8 @@ class FfmpegCompositionRendererTest {
                         0.0,
                         MotionType.NONE,
                         null,
-                        new CompositionTransitionPlan(TransitionType.CROSSFADE, 0.6)));
+                        new CompositionTransitionPlan(TransitionType.CROSSFADE, 0.6),
+                        null));
 
         List<String> command = renderer.buildVisualTransitionCommand(
                 List.of(Path.of("a.mp4"), Path.of("b.mp4")),
@@ -104,6 +112,28 @@ class FfmpegCompositionRendererTest {
         String filter = valueAfter(command, "-filter_complex");
         assertThat(filter).contains("xfade=transition=fade");
         assertThat(filter).contains("duration=0.600");
+    }
+
+    @Test
+    void buildSceneFilterIncludesVisualPresetColorGradeAndOverlay() {
+        CompositionScenePlan scene = new CompositionScenePlan(
+                "scene-1",
+                SceneType.IMAGE,
+                4.0,
+                0.0,
+                MotionType.NONE,
+                null,
+                new CompositionTransitionPlan(TransitionType.CUT, 0.0),
+                new CompositionVisualEditPlan(
+                        VisualFilterType.SEPIA,
+                        new CompositionColorGradePlan(0.1, 1.2, 1.4),
+                        new CompositionOverlayPlan("#224466", 0.3)));
+
+        String filter = renderer.buildSceneFilter(scene, 1080, 1920, true);
+
+        assertThat(filter).contains("colorchannelmixer");
+        assertThat(filter).contains("eq=brightness=0.100:contrast=1.200:saturation=1.400");
+        assertThat(filter).contains("drawbox=x=0:y=0:w=iw:h=ih:color=0x224466@0.300:t=fill");
     }
 
     private String valueAfter(List<String> values, String flag) {

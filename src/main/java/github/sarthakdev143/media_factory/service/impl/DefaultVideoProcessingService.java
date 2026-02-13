@@ -1,9 +1,12 @@
 package github.sarthakdev143.media_factory.service.impl;
 
 import github.sarthakdev143.media_factory.dto.CompositionCaptionRequest;
+import github.sarthakdev143.media_factory.dto.CompositionColorGradeRequest;
 import github.sarthakdev143.media_factory.dto.CompositionManifestRequest;
+import github.sarthakdev143.media_factory.dto.CompositionOverlayRequest;
 import github.sarthakdev143.media_factory.dto.CompositionSceneRequest;
 import github.sarthakdev143.media_factory.dto.CompositionTransitionRequest;
+import github.sarthakdev143.media_factory.dto.CompositionVisualEditRequest;
 import github.sarthakdev143.media_factory.factory.VideoGeneratorUploaderFactory;
 import github.sarthakdev143.media_factory.integration.video.VideoGeneratorUploader;
 import github.sarthakdev143.media_factory.integration.youtube.YouTubeServiceProvider;
@@ -14,10 +17,14 @@ import github.sarthakdev143.media_factory.model.TransitionType;
 import github.sarthakdev143.media_factory.model.UploadResult;
 import github.sarthakdev143.media_factory.model.VideoJobState;
 import github.sarthakdev143.media_factory.model.VideoJobStatus;
+import github.sarthakdev143.media_factory.model.VisualFilterType;
 import github.sarthakdev143.media_factory.model.composition.CompositionCaptionPlan;
+import github.sarthakdev143.media_factory.model.composition.CompositionColorGradePlan;
+import github.sarthakdev143.media_factory.model.composition.CompositionOverlayPlan;
 import github.sarthakdev143.media_factory.model.composition.CompositionRenderPlan;
 import github.sarthakdev143.media_factory.model.composition.CompositionScenePlan;
 import github.sarthakdev143.media_factory.model.composition.CompositionTransitionPlan;
+import github.sarthakdev143.media_factory.model.composition.CompositionVisualEditPlan;
 import github.sarthakdev143.media_factory.service.CompositionRenderer;
 import github.sarthakdev143.media_factory.service.VideoProcessingService;
 import io.micrometer.core.instrument.Counter;
@@ -351,6 +358,7 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
             MotionType motion = scene.motion() == null ? MotionType.NONE : scene.motion();
             CompositionCaptionPlan captionPlan = toCaptionPlan(scene.caption());
             CompositionTransitionPlan transitionPlan = toTransitionPlan(scene.transition());
+            CompositionVisualEditPlan visualEditPlan = toVisualEditPlan(scene.visualEdit());
 
             scenePlans.add(new CompositionScenePlan(
                     scene.assetId(),
@@ -359,7 +367,8 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
                     clipStartSeconds,
                     motion,
                     captionPlan,
-                    transitionPlan));
+                    transitionPlan,
+                    visualEditPlan));
 
             totalDurationSeconds += durationSeconds;
             if (transitionPlan.type() == TransitionType.CROSSFADE) {
@@ -391,6 +400,35 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
             return new CompositionTransitionPlan(TransitionType.CUT, 0.0);
         }
         return new CompositionTransitionPlan(TransitionType.CROSSFADE, transition.transitionDurationSec());
+    }
+
+    private CompositionVisualEditPlan toVisualEditPlan(CompositionVisualEditRequest visualEdit) {
+        if (visualEdit == null) {
+            return new CompositionVisualEditPlan(
+                    VisualFilterType.NONE,
+                    new CompositionColorGradePlan(0.0, 1.0, 1.0),
+                    null);
+        }
+
+        CompositionColorGradeRequest colorGrade = visualEdit.colorGrade();
+        CompositionColorGradePlan colorGradePlan = colorGrade == null
+                ? new CompositionColorGradePlan(0.0, 1.0, 1.0)
+                : new CompositionColorGradePlan(
+                        colorGrade.brightness() == null ? 0.0 : colorGrade.brightness(),
+                        colorGrade.contrast() == null ? 1.0 : colorGrade.contrast(),
+                        colorGrade.saturation() == null ? 1.0 : colorGrade.saturation());
+
+        CompositionOverlayRequest overlay = visualEdit.overlay();
+        CompositionOverlayPlan overlayPlan = overlay == null
+                ? null
+                : new CompositionOverlayPlan(
+                        overlay.hexColor(),
+                        overlay.opacity() == null ? 0.0 : overlay.opacity());
+
+        return new CompositionVisualEditPlan(
+                visualEdit.filter() == null ? VisualFilterType.NONE : visualEdit.filter(),
+                colorGradePlan,
+                overlayPlan);
     }
 
     private void enqueueJob(String jobId, PublishOptions publishOptions) {
