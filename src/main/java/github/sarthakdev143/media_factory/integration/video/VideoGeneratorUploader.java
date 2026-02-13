@@ -1,12 +1,25 @@
 package github.sarthakdev143.media_factory.integration.video;
 
-import github.sarthakdev143.media_factory.integration.youtube.YouTubeServiceFactory;
-
-import java.io.*;
-import java.util.*;
-import com.google.api.services.youtube.YouTube;
-import com.google.api.services.youtube.model.*;
 import com.google.api.client.http.FileContent;
+import com.google.api.client.util.DateTime;
+import com.google.api.client.googleapis.json.GoogleJsonError;
+import com.google.api.client.googleapis.json.GoogleJsonResponseException;
+import com.google.api.services.youtube.YouTube;
+import com.google.api.services.youtube.model.Video;
+import com.google.api.services.youtube.model.VideoSnippet;
+import com.google.api.services.youtube.model.VideoStatus;
+import github.sarthakdev143.media_factory.integration.youtube.YouTubeServiceFactory;
+import github.sarthakdev143.media_factory.model.PrivacyStatus;
+import github.sarthakdev143.media_factory.model.PublishOptions;
+import github.sarthakdev143.media_factory.model.UploadResult;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
 
 public class VideoGeneratorUploader {
 
@@ -85,32 +98,92 @@ public class VideoGeneratorUploader {
     }
 
     /**
-     * Uploads video to YouTube
+     * Uploads video to YouTube.
      * @param videoPath path to video
      * @param title video title
      * @param description video description
+     * @param publishOptions metadata/options for upload
+     * @return upload result containing generated video id
      * @throws IOException
      */
-    public void uploadToYouTube(String videoPath, String title, String description) throws IOException {
+    public UploadResult uploadToYouTube(
+            String videoPath,
+            String title,
+            String description,
+            PublishOptions publishOptions) throws IOException {
         File videoFile = new File(videoPath);
+        PublishOptions resolvedOptions = publishOptions == null
+                ? new PublishOptions(PrivacyStatus.PRIVATE, List.of(), null, null)
+                : publishOptions;
 
+        try {
+            Video response = executeUpload(videoFile, title, description, resolvedOptions);
+            System.out.println("Uploaded video ID: " + response.getId());
+            return new UploadResult(response.getId());
+        } catch (GoogleJsonResponseException categoryError) {
+            if (resolvedOptions.categoryId() == null || !isInvalidCategoryError(categoryError)) {
+                throw categoryError;
+            }
+
+            PublishOptions fallbackOptions = new PublishOptions(
+                    resolvedOptions.privacyStatus(),
+                    resolvedOptions.tags(),
+                    null,
+                    resolvedOptions.publishAt());
+
+            Video fallbackResponse = executeUpload(videoFile, title, description, fallbackOptions);
+            System.out.println("Uploaded video ID without category: " + fallbackResponse.getId());
+            return new UploadResult(
+                    fallbackResponse.getId(),
+                    "Invalid categoryId was ignored. Video uploaded without category.");
+        }
+    }
+
+    private Video executeUpload(
+            File videoFile,
+            String title,
+            String description,
+            PublishOptions publishOptions) throws IOException {
         Video videoObjectDefiningMetadata = new Video();
         VideoStatus status = new VideoStatus();
-        status.setPrivacyStatus("private"); // public / unlisted / private
+        status.setPrivacyStatus(publishOptions.privacyStatus().toApiValue());
+        if (publishOptions.publishAt() != null) {
+            status.setPublishAt(new DateTime(publishOptions.publishAt().toEpochMilli()));
+        }
         videoObjectDefiningMetadata.setStatus(status);
 
         VideoSnippet snippet = new VideoSnippet();
         snippet.setTitle(title);
         snippet.setDescription(description);
+        if (!publishOptions.tags().isEmpty()) {
+            snippet.setTags(publishOptions.tags());
+        }
+        if (publishOptions.categoryId() != null) {
+            snippet.setCategoryId(publishOptions.categoryId());
+        }
         videoObjectDefiningMetadata.setSnippet(snippet);
 
         FileContent mediaContent = new FileContent("video/mp4", videoFile);
-
         YouTube.Videos.Insert request = youtubeService.videos()
-                .insert(java.util.List.of("snippet", "status"), videoObjectDefiningMetadata, mediaContent);
+                .insert(List.of("snippet", "status"), videoObjectDefiningMetadata, mediaContent);
+        return request.execute();
+    }
 
-        Video response = request.execute();
-        System.out.println("Uploaded video ID: " + response.getId());
+    private boolean isInvalidCategoryError(GoogleJsonResponseException exception) {
+        GoogleJsonError details = exception.getDetails();
+        if (details == null || details.getErrors() == null) {
+            return false;
+        }
+        return details.getErrors()
+                .stream()
+                .map(GoogleJsonError.ErrorInfo::getReason)
+                .filter(Objects::nonNull)
+                .anyMatch("invalidCategoryId"::equals);
+    }
+
+    public void uploadThumbnail(String videoId, String thumbnailPath, String thumbnailContentType) throws IOException {
+        FileContent mediaContent = new FileContent(thumbnailContentType, new File(thumbnailPath));
+        youtubeService.thumbnails().set(videoId, mediaContent).execute();
     }
 
     public static void main(String[] args) throws Exception {
@@ -133,8 +206,8 @@ public class VideoGeneratorUploader {
         uploader.uploadToYouTube(
                 "D:\\media-factory\\output.mp4",
                 "My Test Video",
-                "Created with FFmpeg + Java Automation"
+                "Created with FFmpeg + Java Automation",
+                new PublishOptions(PrivacyStatus.PRIVATE, List.of(), null, null)
         );
     }
 }
-

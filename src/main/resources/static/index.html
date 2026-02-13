@@ -5,142 +5,311 @@
     <meta charset="UTF-8">
     <title>Video Generator & Uploader</title>
     <style>
+        :root {
+            --bg: #111;
+            --panel: #1a1a1a;
+            --text: #f1f1f1;
+            --muted: #b9b9b9;
+            --accent: #28a745;
+            --accent-hover: #218838;
+            --border: #2c2c2c;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
         body {
-            font-family: Arial;
-            background: #111;
-            color: #eee;
+            font-family: Segoe UI, sans-serif;
+            background: radial-gradient(circle at top, #1f1f1f 0%, var(--bg) 50%);
+            color: var(--text);
+            margin: 0;
+            min-height: 100vh;
             display: flex;
-            flex-direction: column;
-            align-items: center;
-            padding: 50px;
+            justify-content: center;
+            padding: 32px 16px;
+        }
+
+        .card {
+            width: min(760px, 100%);
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 24px;
+        }
+
+        h2 {
+            margin-top: 0;
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 12px;
+        }
+
+        @media (min-width: 720px) {
+            .grid {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .full {
+                grid-column: 1 / -1;
+            }
+        }
+
+        label {
+            display: block;
+            font-size: 13px;
+            color: var(--muted);
+            margin-bottom: 6px;
         }
 
         input,
-        button {
-            margin: 10px 0;
+        select,
+        button,
+        textarea {
+            width: 100%;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: #101010;
+            color: var(--text);
             padding: 10px;
-            font-size: 16px;
-            width: 300px;
+            font-size: 14px;
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 88px;
         }
 
         button {
-            cursor: pointer;
-            background: #28a745;
-            color: #fff;
             border: none;
+            cursor: pointer;
+            background: var(--accent);
+            font-weight: 600;
         }
 
         button:hover {
-            background: #218838;
+            background: var(--accent-hover);
+        }
+
+        .hint {
+            font-size: 12px;
+            color: var(--muted);
+            margin-top: 6px;
         }
 
         #status {
-            margin-top: 20px;
-            font-weight: bold;
+            margin-top: 16px;
+            line-height: 1.45;
+            font-weight: 600;
+            word-break: break-word;
+        }
+
+        #status a {
+            color: #79c7ff;
         }
     </style>
 </head>
 
 <body>
-
+<div class="card">
     <h2>Video Generator & Uploader</h2>
 
     <form id="videoForm">
-        <input type="file" id="image" accept="image/*" required /><br>
-        <input type="file" id="audio" accept="audio/*" required /><br>
-        <input type="number" id="duration" placeholder="Duration (seconds)" required /><br>
-        <input type="text" id="title" placeholder="Video Title" required /><br>
-        <input type="text" id="description" placeholder="Video Description" required /><br>
-        <button type="submit">Generate & Upload</button>
+        <div class="grid">
+            <div>
+                <label for="image">Image</label>
+                <input type="file" id="image" accept="image/*" required>
+            </div>
+
+            <div>
+                <label for="audio">Audio</label>
+                <input type="file" id="audio" accept="audio/*" required>
+            </div>
+
+            <div>
+                <label for="duration">Duration (seconds)</label>
+                <input type="number" id="duration" min="1" max="36000" required>
+            </div>
+
+            <div>
+                <label for="privacyStatus">Privacy</label>
+                <select id="privacyStatus">
+                    <option value="PRIVATE" selected>PRIVATE</option>
+                    <option value="UNLISTED">UNLISTED</option>
+                    <option value="PUBLIC">PUBLIC</option>
+                </select>
+            </div>
+
+            <div class="full">
+                <label for="title">Title</label>
+                <input type="text" id="title" maxlength="100" required>
+            </div>
+
+            <div class="full">
+                <label for="description">Description</label>
+                <textarea id="description" maxlength="5000" required></textarea>
+            </div>
+
+            <div>
+                <label for="tags">Tags (comma-separated)</label>
+                <input type="text" id="tags" placeholder="music, chill, morning">
+            </div>
+
+            <div>
+                <label for="categoryId">Category ID (optional)</label>
+                <input type="text" id="categoryId" placeholder="22">
+            </div>
+
+            <div>
+                <label for="publishAt">Schedule Publish (UTC instant)</label>
+                <input type="datetime-local" id="publishAt">
+                <div class="hint">Converted to UTC ISO-8601 with trailing Z.</div>
+            </div>
+
+            <div>
+                <label for="thumbnail">Custom Thumbnail (JPEG/PNG)</label>
+                <input type="file" id="thumbnail" accept="image/jpeg,image/png">
+            </div>
+
+            <div class="full">
+                <button type="submit">Generate & Upload</button>
+            </div>
+        </div>
     </form>
 
     <div id="status"></div>
+</div>
 
-    <script>
-        const form = document.getElementById('videoForm');
-        const status = document.getElementById('status');
-        let activePoll = null;
+<script>
+    const form = document.getElementById("videoForm");
+    const status = document.getElementById("status");
+    let activePoll = null;
 
-        form.addEventListener('submit', async (e) => {
-            e.preventDefault();
+    form.addEventListener("submit", async (e) => {
+        e.preventDefault();
 
-            const imageFile = document.getElementById('image').files[0];
-            const audioFile = document.getElementById('audio').files[0];
-            const duration = document.getElementById('duration').value;
-            const title = document.getElementById('title').value;
-            const description = document.getElementById('description').value;
+        const imageFile = document.getElementById("image").files[0];
+        const audioFile = document.getElementById("audio").files[0];
+        const thumbnailFile = document.getElementById("thumbnail").files[0];
+        const duration = document.getElementById("duration").value;
+        const title = document.getElementById("title").value;
+        const description = document.getElementById("description").value;
+        const privacyStatus = document.getElementById("privacyStatus").value;
+        const tagsText = document.getElementById("tags").value;
+        const categoryId = document.getElementById("categoryId").value.trim();
+        const publishAtLocal = document.getElementById("publishAt").value;
 
-            if (!imageFile || !audioFile || !duration || !title || !description) {
-                status.innerText = "Please fill all fields!";
+        if (!imageFile || !audioFile || !duration || !title || !description) {
+            status.innerText = "Please fill all required fields.";
+            return;
+        }
+
+        status.innerText = "Uploading... Please wait.";
+
+        const formData = new FormData();
+        formData.append("image", imageFile);
+        formData.append("audio", audioFile);
+        formData.append("duration", duration);
+        formData.append("title", title);
+        formData.append("description", description);
+        formData.append("privacyStatus", privacyStatus);
+
+        const normalizedTags = tagsText
+            .split(",")
+            .map((tag) => tag.trim())
+            .filter(Boolean);
+
+        if (normalizedTags.length > 0) {
+            formData.append("tags", normalizedTags.join(","));
+        }
+
+        if (categoryId) {
+            formData.append("categoryId", categoryId);
+        }
+
+        if (publishAtLocal) {
+            formData.append("publishAt", new Date(publishAtLocal).toISOString());
+        }
+
+        if (thumbnailFile) {
+            formData.append("thumbnail", thumbnailFile);
+        }
+
+        try {
+            const response = await fetch("/api/video/generate", {
+                method: "POST",
+                body: formData
+            });
+
+            const contentType = response.headers.get("content-type") || "";
+            if (!response.ok) {
+                status.innerText = await response.text();
                 return;
             }
 
-            status.innerText = "Uploading... Please wait.";
+            if (!contentType.includes("application/json")) {
+                status.innerText = await response.text();
+                return;
+            }
 
-            const formData = new FormData();
-            formData.append("image", imageFile);
-            formData.append("audio", audioFile);
-            formData.append("duration", duration);
-            formData.append("title", title);
-            formData.append("description", description);
+            const submission = await response.json();
+            status.innerText = `Job ${submission.jobId}: ${submission.state}. ${submission.message}`;
+            pollJobStatus(submission.jobId);
+        } catch (err) {
+            console.error(err);
+            status.innerText = "Error: " + err.message;
+        }
+    });
 
+    function renderStatus(job) {
+        let message = `Job ${job.jobId}: ${job.state}. ${job.message}`;
+
+        if (job.youtubeVideoUrl) {
+            message += `\nVideo URL: ${job.youtubeVideoUrl}`;
+        }
+
+        if (job.warningMessage) {
+            message += `\nWarning: ${job.warningMessage}`;
+        }
+
+        status.innerText = message;
+    }
+
+    function pollJobStatus(jobId) {
+        if (activePoll) {
+            clearInterval(activePoll);
+        }
+
+        activePoll = setInterval(async () => {
             try {
-                const response = await fetch("/api/video/generate", {
-                    method: "POST",
-                    body: formData
-                });
-
-                const contentType = response.headers.get("content-type") || "";
+                const response = await fetch(`/api/video/status/${jobId}`);
                 if (!response.ok) {
                     status.innerText = await response.text();
+                    clearInterval(activePoll);
+                    activePoll = null;
                     return;
                 }
 
-                if (!contentType.includes("application/json")) {
-                    status.innerText = await response.text();
-                    return;
-                }
+                const job = await response.json();
+                renderStatus(job);
 
-                const submission = await response.json();
-                status.innerText = `Job ${submission.jobId}: ${submission.state}. ${submission.message}`;
-                pollJobStatus(submission.jobId);
-
-            } catch (err) {
-                console.error(err);
-                status.innerText = "Error: " + err.message;
-            }
-        });
-
-        function pollJobStatus(jobId) {
-            if (activePoll) {
-                clearInterval(activePoll);
-            }
-
-            activePoll = setInterval(async () => {
-                try {
-                    const response = await fetch(`/api/video/status/${jobId}`);
-                    if (!response.ok) {
-                        status.innerText = await response.text();
-                        clearInterval(activePoll);
-                        activePoll = null;
-                        return;
-                    }
-
-                    const job = await response.json();
-                    status.innerText = `Job ${job.jobId}: ${job.state}. ${job.message}`;
-
-                    if (job.state === "COMPLETED" || job.state === "FAILED") {
-                        clearInterval(activePoll);
-                        activePoll = null;
-                    }
-                } catch (err) {
-                    status.innerText = "Status check failed: " + err.message;
+                if (job.state === "COMPLETED" || job.state === "FAILED") {
                     clearInterval(activePoll);
                     activePoll = null;
                 }
-            }, 3000);
-        }
-    </script>
+            } catch (err) {
+                status.innerText = "Status check failed: " + err.message;
+                clearInterval(activePoll);
+                activePoll = null;
+            }
+        }, 3000);
+    }
+</script>
 
 </body>
 

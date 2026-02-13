@@ -1,5 +1,6 @@
 package github.sarthakdev143.media_factory.service;
 
+import github.sarthakdev143.media_factory.model.PublishOptions;
 import github.sarthakdev143.media_factory.model.VideoJobStatus;
 
 import org.springframework.web.multipart.MultipartFile;
@@ -14,7 +15,9 @@ public interface VideoProcessingService {
             MultipartFile audio,
             int durationSeconds,
             String title,
-            String description) throws IOException;
+            String description,
+            PublishOptions publishOptions,
+            MultipartFile thumbnail) throws IOException;
 
     Optional<VideoJobStatus> getJobStatus(String jobId);
 }
