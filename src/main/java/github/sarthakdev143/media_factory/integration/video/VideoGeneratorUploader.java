@@ -1,4 +1,6 @@
-package github.sarthakdev143.media_factory;
+package github.sarthakdev143.media_factory.integration.video;
+
+import github.sarthakdev143.media_factory.integration.youtube.YouTubeServiceFactory;
 
 import java.io.*;
 import java.util.*;

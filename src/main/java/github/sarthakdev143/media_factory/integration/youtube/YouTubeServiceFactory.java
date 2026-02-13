@@ -1,4 +1,4 @@
-package github.sarthakdev143.media_factory;
+package github.sarthakdev143.media_factory.integration.youtube;
 
 import com.google.api.client.auth.oauth2.AuthorizationCodeResponseUrl;
 import com.google.api.client.auth.oauth2.Credential;
@@ -33,7 +33,7 @@ public class YouTubeServiceFactory {
 
     private static final String APPLICATION_NAME = "MyVideoUploader";
     private static final String CREDENTIALS_PATH_ENV = "YOUTUBE_CREDENTIALS_PATH";
-    private static final Path DEFAULT_CREDENTIALS_PATH = Path.of("credentials.json");
+    private static final Path DEFAULT_CREDENTIALS_PATH = Path.of("secrets/credentials.json");
     private static final Path TOKENS_DIR_PATH = Path.of(".youtube-tokens");
     private static final int OAUTH_CALLBACK_PORT = 8888;
     private static final String OAUTH_CALLBACK_PATH = "/oauth2callback";

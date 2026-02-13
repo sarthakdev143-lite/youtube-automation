@@ -59,6 +59,7 @@
     <script>
         const form = document.getElementById('videoForm');
         const status = document.getElementById('status');
+        let activePoll = null;
 
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -89,14 +90,56 @@
                     body: formData
                 });
 
-                const text = await response.text();
-                status.innerText = text;
+                const contentType = response.headers.get("content-type") || "";
+                if (!response.ok) {
+                    status.innerText = await response.text();
+                    return;
+                }
+
+                if (!contentType.includes("application/json")) {
+                    status.innerText = await response.text();
+                    return;
+                }
+
+                const submission = await response.json();
+                status.innerText = `Job ${submission.jobId}: ${submission.state}. ${submission.message}`;
+                pollJobStatus(submission.jobId);
 
             } catch (err) {
                 console.error(err);
                 status.innerText = "Error: " + err.message;
             }
         });
+
+        function pollJobStatus(jobId) {
+            if (activePoll) {
+                clearInterval(activePoll);
+            }
+
+            activePoll = setInterval(async () => {
+                try {
+                    const response = await fetch(`/api/video/status/${jobId}`);
+                    if (!response.ok) {
+                        status.innerText = await response.text();
+                        clearInterval(activePoll);
+                        activePoll = null;
+                        return;
+                    }
+
+                    const job = await response.json();
+                    status.innerText = `Job ${job.jobId}: ${job.state}. ${job.message}`;
+
+                    if (job.state === "COMPLETED" || job.state === "FAILED") {
+                        clearInterval(activePoll);
+                        activePoll = null;
+                    }
+                } catch (err) {
+                    status.innerText = "Status check failed: " + err.message;
+                    clearInterval(activePoll);
+                    activePoll = null;
+                }
+            }, 3000);
+        }
     </script>
 
 </body>
