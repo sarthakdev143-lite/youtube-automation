@@ -3,16 +3,18 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>Video Generator & Uploader</title>
+    <title>Media Factory</title>
     <style>
         :root {
-            --bg: #111;
-            --panel: #1a1a1a;
-            --text: #f1f1f1;
-            --muted: #b9b9b9;
-            --accent: #28a745;
-            --accent-hover: #218838;
-            --border: #2c2c2c;
+            --bg: #0f1218;
+            --panel: #181d27;
+            --panel-soft: #111621;
+            --text: #f5f8ff;
+            --muted: #a8b3c8;
+            --accent: #2a9d8f;
+            --accent-hover: #228679;
+            --danger: #d45151;
+            --border: #2a3344;
         }
 
         * {
@@ -20,28 +22,32 @@
         }
 
         body {
-            font-family: Segoe UI, sans-serif;
-            background: radial-gradient(circle at top, #1f1f1f 0%, var(--bg) 50%);
-            color: var(--text);
             margin: 0;
             min-height: 100vh;
+            padding: 30px 14px;
+            color: var(--text);
+            background: radial-gradient(circle at top, #1b2331 0%, #0f1218 52%, #090c11 100%);
+            font-family: "Segoe UI", sans-serif;
             display: flex;
             justify-content: center;
-            padding: 32px 16px;
         }
 
         .card {
-            width: min(760px, 100%);
-            background: var(--panel);
+            width: min(980px, 100%);
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0));
             border: 1px solid var(--border);
             border-radius: 14px;
-            padding: 24px;
+            padding: 22px;
         }
 
         h2 {
-            margin-top: 0;
-            margin-bottom: 20px;
-            font-weight: 600;
+            margin: 0 0 14px;
+        }
+
+        p.subtitle {
+            margin: 0 0 18px;
+            color: var(--muted);
+            font-size: 13px;
         }
 
         .grid {
@@ -50,7 +56,7 @@
             gap: 12px;
         }
 
-        @media (min-width: 720px) {
+        @media (min-width: 860px) {
             .grid {
                 grid-template-columns: 1fr 1fr;
             }
@@ -62,9 +68,9 @@
 
         label {
             display: block;
+            margin-bottom: 6px;
             font-size: 13px;
             color: var(--muted);
-            margin-bottom: 6px;
         }
 
         input,
@@ -74,7 +80,7 @@
             width: 100%;
             border-radius: 8px;
             border: 1px solid var(--border);
-            background: #101010;
+            background: var(--panel-soft);
             color: var(--text);
             padding: 10px;
             font-size: 14px;
@@ -82,67 +88,166 @@
 
         textarea {
             resize: vertical;
-            min-height: 88px;
+            min-height: 92px;
         }
 
         button {
-            border: none;
-            cursor: pointer;
+            border: 0;
             background: var(--accent);
             font-weight: 600;
+            cursor: pointer;
         }
 
         button:hover {
             background: var(--accent-hover);
         }
 
+        .section {
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .section h3 {
+            margin: 0 0 10px;
+            font-size: 14px;
+            color: #d8e2f2;
+        }
+
         .hint {
+            margin-top: 6px;
             font-size: 12px;
             color: var(--muted);
-            margin-top: 6px;
+        }
+
+        .scene-list {
+            display: grid;
+            gap: 10px;
+        }
+
+        .scene {
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 10px;
+            background: rgba(0, 0, 0, 0.18);
+        }
+
+        .scene-title {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            font-weight: 600;
+            font-size: 13px;
+        }
+
+        .scene-grid {
+            display: grid;
+            gap: 8px;
+            grid-template-columns: 1fr;
+        }
+
+        @media (min-width: 760px) {
+            .scene-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .scene-full {
+                grid-column: 1 / -1;
+            }
+        }
+
+        .btn-row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .btn-secondary {
+            background: #31537d;
+        }
+
+        .btn-secondary:hover {
+            background: #29486f;
+        }
+
+        .btn-danger {
+            background: var(--danger);
+            width: auto;
+            padding: 6px 10px;
+            font-size: 12px;
+        }
+
+        .btn-danger:hover {
+            background: #bf4242;
+        }
+
+        .hidden {
+            display: none;
         }
 
         #status {
             margin-top: 16px;
             line-height: 1.45;
-            font-weight: 600;
+            white-space: pre-wrap;
             word-break: break-word;
-        }
-
-        #status a {
-            color: #79c7ff;
+            font-weight: 600;
         }
     </style>
 </head>
 
 <body>
 <div class="card">
-    <h2>Video Generator & Uploader</h2>
+    <h2>Media Factory</h2>
+    <p class="subtitle">Create a simple video from one image or build a multi-scene composition with mixed assets.</p>
 
     <form id="videoForm">
         <div class="grid">
             <div>
-                <label for="image">Image</label>
-                <input type="file" id="image" accept="image/*" required>
+                <label for="mode">Mode</label>
+                <select id="mode">
+                    <option value="basic" selected>Basic</option>
+                    <option value="composition">Composition</option>
+                </select>
             </div>
 
             <div>
-                <label for="audio">Audio</label>
+                <label for="audio">Audio (master track)</label>
                 <input type="file" id="audio" accept="audio/*" required>
             </div>
 
-            <div>
-                <label for="duration">Duration (seconds)</label>
-                <input type="number" id="duration" min="1" max="36000" required>
+            <div class="full section" id="basicSection">
+                <h3>Basic Inputs</h3>
+                <div class="grid">
+                    <div>
+                        <label for="image">Image</label>
+                        <input type="file" id="image" accept="image/*">
+                    </div>
+                    <div>
+                        <label for="duration">Duration (seconds)</label>
+                        <input type="number" id="duration" min="1" max="36000">
+                    </div>
+                </div>
             </div>
 
-            <div>
-                <label for="privacyStatus">Privacy</label>
-                <select id="privacyStatus">
-                    <option value="PRIVATE" selected>PRIVATE</option>
-                    <option value="UNLISTED">UNLISTED</option>
-                    <option value="PUBLIC">PUBLIC</option>
-                </select>
+            <div class="full section hidden" id="compositionSection">
+                <h3>Composition Inputs</h3>
+                <div class="grid">
+                    <div>
+                        <label for="outputPreset">Output Preset</label>
+                        <select id="outputPreset">
+                            <option value="LANDSCAPE_16_9">16:9 Landscape (1920x1080)</option>
+                            <option value="PORTRAIT_9_16" selected>9:16 Portrait (1080x1920)</option>
+                            <option value="SQUARE_1_1">1:1 Square (1080x1080)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="scene-list" id="sceneList"></div>
+                <div class="btn-row" style="margin-top: 10px;">
+                    <button type="button" id="addScene" class="btn-secondary">Add Scene</button>
+                </div>
             </div>
 
             <div class="full">
@@ -153,6 +258,15 @@
             <div class="full">
                 <label for="description">Description</label>
                 <textarea id="description" maxlength="5000" required></textarea>
+            </div>
+
+            <div>
+                <label for="privacyStatus">Privacy</label>
+                <select id="privacyStatus">
+                    <option value="PRIVATE" selected>PRIVATE</option>
+                    <option value="UNLISTED">UNLISTED</option>
+                    <option value="PUBLIC">PUBLIC</option>
+                </select>
             </div>
 
             <div>
@@ -188,44 +302,49 @@
 <script>
     const form = document.getElementById("videoForm");
     const status = document.getElementById("status");
+    const modeSelect = document.getElementById("mode");
+    const basicSection = document.getElementById("basicSection");
+    const compositionSection = document.getElementById("compositionSection");
+    const sceneList = document.getElementById("sceneList");
+    const addSceneButton = document.getElementById("addScene");
     let activePoll = null;
 
-    form.addEventListener("submit", async (e) => {
-        e.preventDefault();
+    modeSelect.addEventListener("change", syncModeView);
+    addSceneButton.addEventListener("click", () => addSceneRow());
 
-        const imageFile = document.getElementById("image").files[0];
+    syncModeView();
+    addSceneRow();
+
+    form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+
+        const mode = modeSelect.value;
         const audioFile = document.getElementById("audio").files[0];
         const thumbnailFile = document.getElementById("thumbnail").files[0];
-        const duration = document.getElementById("duration").value;
-        const title = document.getElementById("title").value;
-        const description = document.getElementById("description").value;
+        const title = document.getElementById("title").value.trim();
+        const description = document.getElementById("description").value.trim();
         const privacyStatus = document.getElementById("privacyStatus").value;
         const tagsText = document.getElementById("tags").value;
         const categoryId = document.getElementById("categoryId").value.trim();
         const publishAtLocal = document.getElementById("publishAt").value;
 
-        if (!imageFile || !audioFile || !duration || !title || !description) {
-            status.innerText = "Please fill all required fields.";
+        if (!audioFile || !title || !description) {
+            status.innerText = "Please provide audio, title, and description.";
             return;
         }
 
-        status.innerText = "Uploading... Please wait.";
-
         const formData = new FormData();
-        formData.append("image", imageFile);
         formData.append("audio", audioFile);
-        formData.append("duration", duration);
         formData.append("title", title);
         formData.append("description", description);
         formData.append("privacyStatus", privacyStatus);
 
-        const normalizedTags = tagsText
+        const tags = tagsText
             .split(",")
-            .map((tag) => tag.trim())
+            .map((item) => item.trim())
             .filter(Boolean);
-
-        if (normalizedTags.length > 0) {
-            formData.append("tags", normalizedTags.join(","));
+        if (tags.length > 0) {
+            formData.append("tags", tags.join(","));
         }
 
         if (categoryId) {
@@ -240,18 +359,46 @@
             formData.append("thumbnail", thumbnailFile);
         }
 
+        let endpoint = "/api/video/generate";
+
+        if (mode === "basic") {
+            const imageFile = document.getElementById("image").files[0];
+            const duration = document.getElementById("duration").value;
+            if (!imageFile || !duration) {
+                status.innerText = "Basic mode requires image and duration.";
+                return;
+            }
+
+            formData.append("image", imageFile);
+            formData.append("duration", duration);
+        } else {
+            endpoint = "/api/video/compositions";
+            const buildResult = buildCompositionManifest();
+            if (buildResult.error) {
+                status.innerText = buildResult.error;
+                return;
+            }
+
+            for (const assetEntry of buildResult.assets) {
+                formData.append(`asset.${assetEntry.assetId}`, assetEntry.file);
+            }
+            formData.append("manifest", JSON.stringify(buildResult.manifest));
+        }
+
+        status.innerText = "Uploading... Please wait.";
+
         try {
-            const response = await fetch("/api/video/generate", {
+            const response = await fetch(endpoint, {
                 method: "POST",
-                body: formData
+                body: formData,
             });
 
-            const contentType = response.headers.get("content-type") || "";
             if (!response.ok) {
                 status.innerText = await response.text();
                 return;
             }
 
+            const contentType = response.headers.get("content-type") || "";
             if (!contentType.includes("application/json")) {
                 status.innerText = await response.text();
                 return;
@@ -260,23 +407,244 @@
             const submission = await response.json();
             status.innerText = `Job ${submission.jobId}: ${submission.state}. ${submission.message}`;
             pollJobStatus(submission.jobId);
-        } catch (err) {
-            console.error(err);
-            status.innerText = "Error: " + err.message;
+        } catch (error) {
+            console.error(error);
+            status.innerText = "Error: " + error.message;
         }
     });
 
+    function syncModeView() {
+        const compositionMode = modeSelect.value === "composition";
+        basicSection.classList.toggle("hidden", compositionMode);
+        compositionSection.classList.toggle("hidden", !compositionMode);
+    }
+
+    function addSceneRow() {
+        const sceneIndex = sceneList.children.length;
+        const row = document.createElement("div");
+        row.className = "scene";
+        row.dataset.sceneIndex = String(sceneIndex);
+
+        row.innerHTML = `
+            <div class="scene-title">
+                <span>Scene ${sceneIndex + 1}</span>
+                <button type="button" class="btn-danger remove-scene">Remove</button>
+            </div>
+            <div class="scene-grid">
+                <div>
+                    <label>Type</label>
+                    <select class="scene-type">
+                        <option value="IMAGE">IMAGE</option>
+                        <option value="VIDEO">VIDEO</option>
+                    </select>
+                </div>
+                <div>
+                    <label>Asset File</label>
+                    <input type="file" class="scene-asset" required>
+                </div>
+                <div class="scene-image-only">
+                    <label>Image Duration (sec)</label>
+                    <input type="number" min="0.5" max="600" step="0.1" class="scene-duration" value="3">
+                </div>
+                <div class="scene-video-only hidden">
+                    <label>Video Clip Start (sec)</label>
+                    <input type="number" min="0" step="0.1" class="scene-clip-start" value="0">
+                </div>
+                <div class="scene-video-only hidden">
+                    <label>Video Clip Duration (sec, optional)</label>
+                    <input type="number" min="0.1" step="0.1" class="scene-clip-duration" placeholder="auto if blank">
+                </div>
+                <div>
+                    <label>Motion</label>
+                    <select class="scene-motion">
+                        <option value="NONE" selected>NONE</option>
+                        <option value="ZOOM_IN">ZOOM_IN</option>
+                        <option value="ZOOM_OUT">ZOOM_OUT</option>
+                        <option value="PAN_LEFT">PAN_LEFT</option>
+                        <option value="PAN_RIGHT">PAN_RIGHT</option>
+                    </select>
+                </div>
+                <div>
+                    <label>Transition</label>
+                    <select class="scene-transition-type">
+                        <option value="CUT" selected>CUT</option>
+                        <option value="CROSSFADE">CROSSFADE</option>
+                    </select>
+                </div>
+                <div class="scene-transition-duration hidden">
+                    <label>Transition Duration (sec)</label>
+                    <input type="number" min="0.2" max="2" step="0.1" class="scene-transition-seconds" value="0.5">
+                </div>
+                <div class="scene-full">
+                    <label>Caption (optional)</label>
+                    <input type="text" class="scene-caption-text" maxlength="200" placeholder="Text overlay for this scene">
+                </div>
+                <div>
+                    <label>Caption Start (sec)</label>
+                    <input type="number" min="0" step="0.1" class="scene-caption-start" value="0">
+                </div>
+                <div>
+                    <label>Caption End (sec, optional)</label>
+                    <input type="number" min="0.1" step="0.1" class="scene-caption-end" placeholder="scene end if blank">
+                </div>
+                <div>
+                    <label>Caption Position</label>
+                    <select class="scene-caption-position">
+                        <option value="BOTTOM" selected>BOTTOM</option>
+                        <option value="CENTER">CENTER</option>
+                        <option value="TOP">TOP</option>
+                    </select>
+                </div>
+            </div>
+        `;
+
+        sceneList.appendChild(row);
+        wireSceneRow(row);
+        renumberScenes();
+    }
+
+    function wireSceneRow(row) {
+        const typeSelect = row.querySelector(".scene-type");
+        const transitionTypeSelect = row.querySelector(".scene-transition-type");
+        const removeButton = row.querySelector(".remove-scene");
+
+        typeSelect.addEventListener("change", () => syncSceneFields(row));
+        transitionTypeSelect.addEventListener("change", () => syncSceneFields(row));
+
+        removeButton.addEventListener("click", () => {
+            row.remove();
+            if (sceneList.children.length === 0) {
+                addSceneRow();
+            }
+            renumberScenes();
+        });
+
+        syncSceneFields(row);
+    }
+
+    function renumberScenes() {
+        Array.from(sceneList.children).forEach((sceneRow, index) => {
+            sceneRow.dataset.sceneIndex = String(index);
+            sceneRow.querySelector(".scene-title span").innerText = `Scene ${index + 1}`;
+
+            const transitionType = sceneRow.querySelector(".scene-transition-type");
+            const transitionDurationBlock = sceneRow.querySelector(".scene-transition-duration");
+            if (index === 0) {
+                transitionType.value = "CUT";
+                transitionType.disabled = true;
+                transitionDurationBlock.classList.add("hidden");
+            } else {
+                transitionType.disabled = false;
+            }
+        });
+    }
+
+    function syncSceneFields(row) {
+        const type = row.querySelector(".scene-type").value;
+        const transitionType = row.querySelector(".scene-transition-type").value;
+
+        row.querySelectorAll(".scene-image-only").forEach((el) => {
+            el.classList.toggle("hidden", type !== "IMAGE");
+        });
+        row.querySelectorAll(".scene-video-only").forEach((el) => {
+            el.classList.toggle("hidden", type !== "VIDEO");
+        });
+
+        const transitionDurationBlock = row.querySelector(".scene-transition-duration");
+        transitionDurationBlock.classList.toggle("hidden", transitionType !== "CROSSFADE");
+    }
+
+    function buildCompositionManifest() {
+        const sceneRows = Array.from(sceneList.children);
+        if (sceneRows.length === 0) {
+            return { error: "At least one composition scene is required." };
+        }
+
+        const assets = [];
+        const scenes = [];
+
+        for (let index = 0; index < sceneRows.length; index++) {
+            const row = sceneRows[index];
+            const sceneType = row.querySelector(".scene-type").value;
+            const assetFile = row.querySelector(".scene-asset").files[0];
+            const motion = row.querySelector(".scene-motion").value;
+            const transitionType = index === 0 ? "CUT" : row.querySelector(".scene-transition-type").value;
+            const transitionDuration = row.querySelector(".scene-transition-seconds").value;
+
+            if (!assetFile) {
+                return { error: `Scene ${index + 1} requires an asset file.` };
+            }
+
+            const assetId = `scene-${index + 1}`;
+            assets.push({ assetId, file: assetFile });
+
+            const scene = {
+                assetId,
+                type: sceneType,
+                motion,
+                transition: {
+                    type: transitionType,
+                },
+            };
+
+            if (sceneType === "IMAGE") {
+                const duration = row.querySelector(".scene-duration").value;
+                if (!duration) {
+                    return { error: `Scene ${index + 1} image duration is required.` };
+                }
+                scene.durationSec = Number(duration);
+            } else {
+                const clipStart = row.querySelector(".scene-clip-start").value;
+                const clipDuration = row.querySelector(".scene-clip-duration").value;
+                scene.clipStartSec = clipStart ? Number(clipStart) : 0;
+                if (clipDuration) {
+                    scene.clipDurationSec = Number(clipDuration);
+                }
+            }
+
+            if (transitionType === "CROSSFADE") {
+                if (!transitionDuration) {
+                    return { error: `Scene ${index + 1} transition duration is required for CROSSFADE.` };
+                }
+                scene.transition.transitionDurationSec = Number(transitionDuration);
+            }
+
+            const captionText = row.querySelector(".scene-caption-text").value.trim();
+            const captionStart = row.querySelector(".scene-caption-start").value;
+            const captionEnd = row.querySelector(".scene-caption-end").value;
+            const captionPosition = row.querySelector(".scene-caption-position").value;
+
+            if (captionText) {
+                scene.caption = {
+                    text: captionText,
+                    startOffsetSec: captionStart ? Number(captionStart) : 0,
+                    position: captionPosition,
+                };
+                if (captionEnd) {
+                    scene.caption.endOffsetSec = Number(captionEnd);
+                }
+            }
+
+            scenes.push(scene);
+        }
+
+        return {
+            manifest: {
+                outputPreset: document.getElementById("outputPreset").value,
+                scenes,
+            },
+            assets,
+        };
+    }
+
     function renderStatus(job) {
         let message = `Job ${job.jobId}: ${job.state}. ${job.message}`;
-
         if (job.youtubeVideoUrl) {
             message += `\nVideo URL: ${job.youtubeVideoUrl}`;
         }
-
         if (job.warningMessage) {
             message += `\nWarning: ${job.warningMessage}`;
         }
-
         status.innerText = message;
     }
 
@@ -302,8 +670,8 @@
                     clearInterval(activePoll);
                     activePoll = null;
                 }
-            } catch (err) {
-                status.innerText = "Status check failed: " + err.message;
+            } catch (error) {
+                status.innerText = "Status check failed: " + error.message;
                 clearInterval(activePoll);
                 activePoll = null;
             }

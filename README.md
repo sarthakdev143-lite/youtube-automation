@@ -1,10 +1,10 @@
 # Media Factory
 
 Spring Boot app that:
-- accepts an image + audio upload
-- generates an MP4 with FFmpeg
-- uploads the result to YouTube
-- returns an async `jobId` and exposes job status polling
+- accepts uploads for basic and composition workflows
+- generates MP4 output with FFmpeg
+- uploads result to YouTube
+- returns async `jobId` and supports polling with `GET /api/video/status/{jobId}`
 
 ## Prerequisites
 
@@ -44,9 +44,10 @@ On first upload, a browser consent flow is triggered. Tokens are stored under `.
 
 ## API
 
-### Submit Job
+### Legacy Basic Workflow (still supported)
 
-`POST /api/video/generate`  
+`POST /api/video/generate`
+
 Content-Type: `multipart/form-data`
 
 Required fields:
@@ -63,11 +64,52 @@ Optional publishing fields:
 - `publishAt`: ISO-8601 UTC instant ending with `Z` (example `2026-02-20T18:30:00Z`), must be at least 5 minutes in future
 - `thumbnail`: optional image file (`image/jpeg` or `image/png`)
 
-Validation rules:
-- `publishAt` requires `privacyStatus=PRIVATE`
-- invalid optional field values return `400 Bad Request`
+### New Composition Workflow
 
-Successful response: `202 Accepted`
+`POST /api/video/compositions`
+
+Content-Type: `multipart/form-data`
+
+Required fields:
+- `manifest` (JSON string)
+- `audio` (file, `audio/*`) as single master audio track
+- `title` (max `100` chars)
+- `description` (max `5000` chars)
+- one file part for each scene asset reference: `asset.<assetId>`
+
+Optional publishing fields:
+- `privacyStatus`, `tags`, `categoryId`, `publishAt`, `thumbnail` (same rules as `/api/video/generate`)
+
+Manifest schema:
+- `outputPreset` required: `LANDSCAPE_16_9 | PORTRAIT_9_16 | SQUARE_1_1`
+- `scenes` required: min 1, max 50
+- each scene requires: `assetId`, `type`
+- `type` values: `IMAGE | VIDEO`
+- `IMAGE` scenes require `durationSec` (`0.5` to `600`)
+- `VIDEO` scenes support `clipStartSec` (default `0`) and optional `clipDurationSec` (`>0`)
+- optional `motion`: `NONE | ZOOM_IN | ZOOM_OUT | PAN_LEFT | PAN_RIGHT`
+- optional `caption`:
+  - `text`
+  - `startOffsetSec`
+  - `endOffsetSec`
+  - `position`: `TOP | CENTER | BOTTOM`
+- optional `transition`:
+  - `type`: `CUT | CROSSFADE`
+  - `transitionDurationSec` required only for `CROSSFADE` (`0.2` to `2.0`)
+- first scene transition must be `CUT`
+- total timeline duration must be `<= 36000` seconds
+
+Output preset mapping:
+- `LANDSCAPE_16_9` -> `1920x1080`
+- `PORTRAIT_9_16` -> `1080x1920`
+- `SQUARE_1_1` -> `1080x1080`
+
+Validation rules:
+- missing referenced `asset.<assetId>` returns `400 Bad Request`
+- unknown extra asset parts are ignored
+- `publishAt` requires `privacyStatus=PRIVATE`
+
+Successful response for both submit endpoints: `202 Accepted`
 
 ```json
 {
@@ -104,7 +146,7 @@ States: `QUEUED`, `PROCESSING`, `COMPLETED`, `FAILED`
 
 ## cURL Examples
 
-Immediate upload with metadata:
+### Basic upload (legacy endpoint)
 
 ```bash
 curl -X POST "http://localhost:8080/api/video/generate" \
@@ -120,17 +162,36 @@ curl -X POST "http://localhost:8080/api/video/generate" \
   -F "thumbnail=@/path/to/thumb.jpg"
 ```
 
-Scheduled private upload:
+### Composition upload (new endpoint)
 
 ```bash
-curl -X POST "http://localhost:8080/api/video/generate" \
-  -F "image=@/path/to/image.jpg" \
-  -F "audio=@/path/to/audio.mp3" \
-  -F "duration=60" \
-  -F "title=Scheduled Video" \
-  -F "description=Publish later" \
-  -F "privacyStatus=PRIVATE" \
-  -F "publishAt=2026-02-20T18:30:00Z"
+curl -X POST "http://localhost:8080/api/video/compositions" \
+  -F 'manifest={
+    "outputPreset":"PORTRAIT_9_16",
+    "scenes":[
+      {
+        "assetId":"scene-1",
+        "type":"IMAGE",
+        "durationSec":3,
+        "motion":"ZOOM_IN",
+        "transition":{"type":"CUT"},
+        "caption":{"text":"Intro","startOffsetSec":0,"endOffsetSec":2,"position":"BOTTOM"}
+      },
+      {
+        "assetId":"scene-2",
+        "type":"VIDEO",
+        "clipStartSec":1.0,
+        "clipDurationSec":4.0,
+        "transition":{"type":"CROSSFADE","transitionDurationSec":0.5}
+      }
+    ]
+  }' \
+  -F "asset.scene-1=@/path/to/cover.jpg" \
+  -F "asset.scene-2=@/path/to/clip.mp4" \
+  -F "audio=@/path/to/music.mp3" \
+  -F "title=Composition Demo" \
+  -F "description=Mixed media timeline" \
+  -F "privacyStatus=PRIVATE"
 ```
 
 Then poll:
@@ -138,6 +199,12 @@ Then poll:
 ```bash
 curl "http://localhost:8080/api/video/status/<jobId>"
 ```
+
+## Current Composition Limits
+
+- One master audio track per job (`audio` field)
+- No scene-level audio mixing in this phase
+- Jobs are stored in memory (not persisted)
 
 ## Tests
 

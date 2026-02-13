@@ -1,10 +1,19 @@
 package github.sarthakdev143.media_factory.controller;
 
+import github.sarthakdev143.media_factory.dto.CompositionCaptionRequest;
+import github.sarthakdev143.media_factory.dto.CompositionManifestRequest;
+import github.sarthakdev143.media_factory.dto.CompositionSceneRequest;
+import github.sarthakdev143.media_factory.dto.CompositionTransitionRequest;
+import github.sarthakdev143.media_factory.model.MotionType;
+import github.sarthakdev143.media_factory.model.OutputPreset;
 import github.sarthakdev143.media_factory.model.PrivacyStatus;
 import github.sarthakdev143.media_factory.model.PublishOptions;
+import github.sarthakdev143.media_factory.model.SceneType;
+import github.sarthakdev143.media_factory.model.TransitionType;
 import github.sarthakdev143.media_factory.model.VideoJobState;
 import github.sarthakdev143.media_factory.model.VideoJobStatus;
 import github.sarthakdev143.media_factory.service.VideoProcessingService;
+import github.sarthakdev143.media_factory.service.impl.CompositionManifestValidator;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,12 +25,14 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
@@ -41,6 +52,9 @@ class VideoControllerTest {
 
     @MockitoBean
     private VideoProcessingService videoProcessingService;
+
+    @MockitoBean
+    private CompositionManifestValidator compositionManifestValidator;
 
     @Test
     void generateReturnsAcceptedForValidRequest() throws Exception {
@@ -142,6 +156,99 @@ class VideoControllerTest {
                 .andExpect(content().string(containsString("privacyStatus must be one of")));
 
         verifyNoInteractions(videoProcessingService);
+    }
+
+    @Test
+    void compositionReturnsAcceptedForValidRequest() throws Exception {
+        CompositionManifestRequest normalizedManifest = validCompositionManifest();
+        when(compositionManifestValidator.normalizeAndValidate(any(CompositionManifestRequest.class), anyMap()))
+                .thenReturn(normalizedManifest);
+        when(videoProcessingService.submitCompositionJob(anyMap(), any(), any(), anyString(), anyString(), any(), any()))
+                .thenReturn("job-comp-123");
+
+        mockMvc.perform(multipart("/api/video/compositions")
+                        .file(validAudio())
+                        .file(validCompositionAsset())
+                        .param("manifest", validManifestJson())
+                        .param("title", "Composition title")
+                        .param("description", "Composition description"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.jobId").value("job-comp-123"))
+                .andExpect(jsonPath("$.state").value("QUEUED"));
+
+        ArgumentCaptor<Map<String, org.springframework.web.multipart.MultipartFile>> assetCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(videoProcessingService).submitCompositionJob(
+                assetCaptor.capture(),
+                any(),
+                eq(normalizedManifest),
+                eq("Composition title"),
+                eq("Composition description"),
+                any(PublishOptions.class),
+                any());
+        assertThat(assetCaptor.getValue()).containsKey("scene-1");
+    }
+
+    @Test
+    void compositionReturnsBadRequestForMalformedManifestJson() throws Exception {
+        mockMvc.perform(multipart("/api/video/compositions")
+                        .file(validAudio())
+                        .file(validCompositionAsset())
+                        .param("manifest", "{not-json")
+                        .param("title", "Composition title")
+                        .param("description", "Composition description"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().string(containsString("manifest must be valid JSON")));
+
+        verifyNoInteractions(videoProcessingService, compositionManifestValidator);
+    }
+
+    @Test
+    void compositionReturnsBadRequestForMissingAssetReference() throws Exception {
+        when(compositionManifestValidator.normalizeAndValidate(any(CompositionManifestRequest.class), anyMap()))
+                .thenThrow(new IllegalArgumentException("Missing required file part asset.scene-1"));
+
+        mockMvc.perform(multipart("/api/video/compositions")
+                        .file(validAudio())
+                        .param("manifest", validManifestJson())
+                        .param("title", "Composition title")
+                        .param("description", "Composition description"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().string(containsString("Missing required file part")));
+
+        verifyNoInteractions(videoProcessingService);
+    }
+
+    @Test
+    void compositionReturnsBadRequestForInvalidTransitionConfig() throws Exception {
+        when(compositionManifestValidator.normalizeAndValidate(any(CompositionManifestRequest.class), anyMap()))
+                .thenThrow(new IllegalArgumentException("The first scene transition must be CUT."));
+
+        mockMvc.perform(multipart("/api/video/compositions")
+                        .file(validAudio())
+                        .file(validCompositionAsset())
+                        .param("manifest", validManifestJson())
+                        .param("title", "Composition title")
+                        .param("description", "Composition description"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().string(containsString("first scene transition")));
+
+        verifyNoInteractions(videoProcessingService);
+    }
+
+    @Test
+    void compositionReturnsBadRequestWhenPublishAtWithNonPrivatePrivacy() throws Exception {
+        mockMvc.perform(multipart("/api/video/compositions")
+                        .file(validAudio())
+                        .file(validCompositionAsset())
+                        .param("manifest", validManifestJson())
+                        .param("title", "Composition title")
+                        .param("description", "Composition description")
+                        .param("privacyStatus", "PUBLIC")
+                        .param("publishAt", Instant.now().plusSeconds(600).toString()))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().string(containsString("publishAt can only be used with privacyStatus=PRIVATE")));
+
+        verifyNoInteractions(videoProcessingService, compositionManifestValidator);
     }
 
     @Test
@@ -260,6 +367,32 @@ class VideoControllerTest {
                 .andExpect(content().string(containsString("Job not found")));
     }
 
+    private CompositionManifestRequest validCompositionManifest() {
+        return new CompositionManifestRequest(
+                OutputPreset.PORTRAIT_9_16,
+                List.of(new CompositionSceneRequest(
+                        "scene-1",
+                        SceneType.IMAGE,
+                        2.0,
+                        0.0,
+                        null,
+                        MotionType.ZOOM_IN,
+                        new CompositionCaptionRequest("hello", 0.0, 1.5, github.sarthakdev143.media_factory.model.CaptionPosition.BOTTOM),
+                        new CompositionTransitionRequest(TransitionType.CUT, null))));
+    }
+
+    private String validManifestJson() {
+        return "{" +
+                "\"outputPreset\":\"PORTRAIT_9_16\"," +
+                "\"scenes\":[{" +
+                "\"assetId\":\"scene-1\"," +
+                "\"type\":\"IMAGE\"," +
+                "\"durationSec\":2.0," +
+                "\"motion\":\"ZOOM_IN\"," +
+                "\"transition\":{\"type\":\"CUT\"}" +
+                "}]}";
+    }
+
     private MockMultipartFile validImage() {
         return new MockMultipartFile(
                 "image",
@@ -274,6 +407,14 @@ class VideoControllerTest {
                 "audio.mp3",
                 "audio/mpeg",
                 new byte[]{4, 5, 6});
+    }
+
+    private MockMultipartFile validCompositionAsset() {
+        return new MockMultipartFile(
+                "asset.scene-1",
+                "scene.jpg",
+                "image/jpeg",
+                new byte[]{8, 8, 8});
     }
 
     private MockMultipartFile validThumbnail() {
