@@ -1,111 +1,108 @@
 package github.sarthakdev143.media_factory.integration.video;
 
-import com.google.api.client.http.FileContent;
-import com.google.api.client.util.DateTime;
 import com.google.api.client.googleapis.json.GoogleJsonError;
 import com.google.api.client.googleapis.json.GoogleJsonResponseException;
+import com.google.api.client.http.FileContent;
+import com.google.api.client.util.DateTime;
 import com.google.api.services.youtube.YouTube;
 import com.google.api.services.youtube.model.Video;
 import com.google.api.services.youtube.model.VideoSnippet;
 import com.google.api.services.youtube.model.VideoStatus;
-import github.sarthakdev143.media_factory.integration.youtube.YouTubeServiceFactory;
 import github.sarthakdev143.media_factory.model.PrivacyStatus;
 import github.sarthakdev143.media_factory.model.PublishOptions;
 import github.sarthakdev143.media_factory.model.UploadResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStreamReader;
-import java.util.ArrayList;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.IntConsumer;
 
 public class VideoGeneratorUploader {
 
-    private static final String FFMPEG_PATH_ENV = "FFMPEG_PATH";
-    private static final String DEFAULT_FFMPEG_BINARY = "ffmpeg";
+    private static final Logger logger = LoggerFactory.getLogger(VideoGeneratorUploader.class);
 
-    // YouTube API service (you must configure OAuth2)
     private final YouTube youtubeService;
+    private final FfmpegCommandBuilder ffmpegCommandBuilder;
+    private final FfmpegProcessRunner ffmpegProcessRunner;
 
-    public VideoGeneratorUploader(YouTube youtubeService) {
+    public VideoGeneratorUploader(
+            YouTube youtubeService,
+            FfmpegCommandBuilder ffmpegCommandBuilder,
+            FfmpegProcessRunner ffmpegProcessRunner) {
         this.youtubeService = youtubeService;
+        this.ffmpegCommandBuilder = ffmpegCommandBuilder;
+        this.ffmpegProcessRunner = ffmpegProcessRunner;
     }
 
-    /**
-     * Generates a video from a single image and looping audio
-     * @param imagePath path to the image
-     * @param audioPath path to audio
-     * @param durationSeconds video duration in seconds
-     * @param outputPath path to save generated video
-     * @throws IOException
-     * @throws InterruptedException
-     */
-    public void generateVideo(String imagePath, String audioPath, int durationSeconds, String outputPath)
-            throws IOException, InterruptedException {
+    public VideoGeneratorUploader(YouTube youtubeService) {
+        this(youtubeService, null, null);
+    }
 
-        List<String> command = new ArrayList<>();
-        command.add(resolveFfmpegBinary());
-        command.add("-stream_loop");
-        command.add("-1"); // loop image infinitely
-        command.add("-i");
-        command.add(imagePath);
-        command.add("-stream_loop");
-        command.add("-1"); // loop audio infinitely
-        command.add("-i");
-        command.add(audioPath);
-        command.add("-c:v");
-        command.add("libx264"); // change to "h264_nvenc" if you have NVIDIA GPU
-        command.add("-preset");
-        command.add("veryfast");
-        command.add("-crf");
-        command.add("23");
-        command.add("-pix_fmt");
-        command.add("yuv420p");
-        command.add("-t");
-        command.add(String.valueOf(durationSeconds));
-        command.add("-shortest"); // stop when audio ends
-        command.add("-y"); // overwrite if exists
-        command.add(outputPath);
+    public void generateVideo(
+            String imagePath,
+            String audioPath,
+            int durationSeconds,
+            String outputPath) throws IOException, InterruptedException {
+        generateVideo(imagePath, audioPath, durationSeconds, outputPath, "adhoc-job", progress -> {
+        });
+    }
 
-        ProcessBuilder pb = new ProcessBuilder(command);
-        pb.redirectErrorStream(true);
-        Process process = pb.start();
+    public void generateVideo(
+            String imagePath,
+            String audioPath,
+            int durationSeconds,
+            String outputPath,
+            String jobId,
+            IntConsumer progressConsumer) throws IOException, InterruptedException {
+        if (ffmpegCommandBuilder == null || ffmpegProcessRunner == null) {
+            throw new IllegalStateException(
+                    "FFmpeg runner dependencies are unavailable. Construct with command builder and process runner.");
+        }
 
-        // Print FFmpeg output live
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                System.out.println(line);
+        Path output = Path.of(outputPath);
+        boolean tryNvenc = ffmpegCommandBuilder.nvencAvailable();
+
+        if (tryNvenc) {
+            try {
+                ffmpegProcessRunner.runCommand(
+                        jobId,
+                        "encode-basic-nvenc",
+                        ffmpegCommandBuilder.buildBasicImageAudioCommand(
+                                imagePath,
+                                audioPath,
+                                durationSeconds,
+                                outputPath,
+                                true),
+                        durationSeconds,
+                        output,
+                        progressConsumer);
+                return;
+            } catch (IOException nvencError) {
+                if (!ffmpegProcessRunner.isNvencFailure(nvencError)) {
+                    throw nvencError;
+                }
+                logger.warn("[NVENC FALLBACK] jobId={} reason={}", jobId, nvencError.getMessage());
             }
         }
 
-        int exitCode = process.waitFor();
-        if (exitCode != 0) {
-            throw new RuntimeException("FFmpeg failed with exit code " + exitCode);
-        }
-
-        System.out.println("Video generated successfully: " + outputPath);
+        ffmpegProcessRunner.runCommand(
+                jobId,
+                "encode-basic-libx264",
+                ffmpegCommandBuilder.buildBasicImageAudioCommand(
+                        imagePath,
+                        audioPath,
+                        durationSeconds,
+                        outputPath,
+                        false),
+                durationSeconds,
+                output,
+                progressConsumer);
     }
 
-    private String resolveFfmpegBinary() {
-        String configuredPath = System.getenv(FFMPEG_PATH_ENV);
-        if (configuredPath != null && !configuredPath.isBlank()) {
-            return configuredPath;
-        }
-        return DEFAULT_FFMPEG_BINARY;
-    }
-
-    /**
-     * Uploads video to YouTube.
-     * @param videoPath path to video
-     * @param title video title
-     * @param description video description
-     * @param publishOptions metadata/options for upload
-     * @return upload result containing generated video id
-     * @throws IOException
-     */
     public UploadResult uploadToYouTube(
             String videoPath,
             String title,
@@ -118,7 +115,6 @@ public class VideoGeneratorUploader {
 
         try {
             Video response = executeUpload(videoFile, title, description, resolvedOptions);
-            System.out.println("Uploaded video ID: " + response.getId());
             return new UploadResult(response.getId());
         } catch (GoogleJsonResponseException categoryError) {
             if (resolvedOptions.categoryId() == null || !isInvalidCategoryError(categoryError)) {
@@ -132,7 +128,6 @@ public class VideoGeneratorUploader {
                     resolvedOptions.publishAt());
 
             Video fallbackResponse = executeUpload(videoFile, title, description, fallbackOptions);
-            System.out.println("Uploaded video ID without category: " + fallbackResponse.getId());
             return new UploadResult(
                     fallbackResponse.getId(),
                     "Invalid categoryId was ignored. Video uploaded without category.");
@@ -184,30 +179,5 @@ public class VideoGeneratorUploader {
     public void uploadThumbnail(String videoId, String thumbnailPath, String thumbnailContentType) throws IOException {
         FileContent mediaContent = new FileContent(thumbnailContentType, new File(thumbnailPath));
         youtubeService.thumbnails().set(videoId, mediaContent).execute();
-    }
-
-    public static void main(String[] args) throws Exception {
-        // Example usage:
-
-        // 1. Set up your OAuth2 YouTube API service here
-        YouTube youtubeService = YouTubeServiceFactory.getService(); // <-- implement your OAuth
-
-        VideoGeneratorUploader uploader = new VideoGeneratorUploader(youtubeService);
-
-        // 2. Generate video
-        uploader.generateVideo(
-                "D:\\media-factory\\image.jpg",
-                "D:\\media-factory\\audio.mp3",
-                60, // duration in seconds
-                "D:\\media-factory\\output.mp4"
-        );
-
-        // 3. Upload to YouTube
-        uploader.uploadToYouTube(
-                "D:\\media-factory\\output.mp4",
-                "My Test Video",
-                "Created with FFmpeg + Java Automation",
-                new PublishOptions(PrivacyStatus.PRIVATE, List.of(), null, null)
-        );
     }
 }

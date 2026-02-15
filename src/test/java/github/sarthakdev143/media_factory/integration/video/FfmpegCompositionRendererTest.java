@@ -20,7 +20,19 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class FfmpegCompositionRendererTest {
 
-    private final FfmpegCompositionRenderer renderer = new FfmpegCompositionRenderer();
+    private final FfmpegCompositionRenderer renderer = new FfmpegCompositionRenderer(
+            new FfmpegCommandBuilder(new FfmpegCapabilities() {
+                @Override
+                public String ffmpegBinary() {
+                    return "ffmpeg";
+                }
+
+                @Override
+                public boolean nvencAvailable() {
+                    return false;
+                }
+            }),
+            new FfmpegProcessRunner());
 
     @Test
     void buildImageSceneCommandIncludesMotionAndCaptionFilters() {

@@ -5,6 +5,7 @@ import github.sarthakdev143.media_factory.dto.CompositionManifestRequest;
 import github.sarthakdev143.media_factory.dto.CompositionSceneRequest;
 import github.sarthakdev143.media_factory.dto.CompositionTransitionRequest;
 import github.sarthakdev143.media_factory.factory.VideoGeneratorUploaderFactory;
+import github.sarthakdev143.media_factory.integration.video.FfmpegProcessRunner;
 import github.sarthakdev143.media_factory.integration.video.VideoGeneratorUploader;
 import github.sarthakdev143.media_factory.integration.youtube.YouTubeServiceProvider;
 import github.sarthakdev143.media_factory.model.MotionType;
@@ -17,6 +18,8 @@ import github.sarthakdev143.media_factory.model.UploadResult;
 import github.sarthakdev143.media_factory.model.VideoJobState;
 import github.sarthakdev143.media_factory.model.VideoJobStatus;
 import github.sarthakdev143.media_factory.model.composition.CompositionRenderPlan;
+import github.sarthakdev143.media_factory.persistence.entity.JobEntity;
+import github.sarthakdev143.media_factory.persistence.repository.JobRepository;
 import github.sarthakdev143.media_factory.service.CompositionRenderer;
 import github.sarthakdev143.media_factory.service.JobInProgressException;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -33,9 +36,14 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.Collection;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -68,17 +76,41 @@ class DefaultVideoProcessingServiceTest {
     @Mock
     private YouTube youTubeService;
 
+    @Mock
+    private JobRepository jobRepository;
+
+    @Mock
+    private FfmpegProcessRunner ffmpegProcessRunner;
+
+    private final Map<UUID, JobEntity> persistedJobs = new ConcurrentHashMap<>();
     private DefaultVideoProcessingService service;
 
     @BeforeEach
     void setUp() {
         TaskExecutor directExecutor = Runnable::run;
-        service = new DefaultVideoProcessingService(
-                youTubeServiceProvider,
-                uploaderFactory,
-                compositionRenderer,
-                directExecutor,
-                new SimpleMeterRegistry());
+        service = createService(directExecutor);
+
+        when(jobRepository.save(any(JobEntity.class))).thenAnswer(invocation -> {
+            JobEntity job = invocation.getArgument(0);
+            Instant now = Instant.now();
+            if (job.getCreatedAt() == null) {
+                job.setCreatedAt(now);
+            }
+            job.setUpdatedAt(now);
+            persistedJobs.put(job.getId(), job);
+            return job;
+        });
+        when(jobRepository.findById(any(UUID.class))).thenAnswer(invocation ->
+                Optional.ofNullable(persistedJobs.get(invocation.getArgument(0))));
+        when(jobRepository.findFirstByStateInOrderByCreatedAtAsc(any(Collection.class))).thenAnswer(invocation -> {
+            @SuppressWarnings("unchecked")
+            Collection<VideoJobState> states = invocation.getArgument(0);
+            return persistedJobs.values()
+                    .stream()
+                    .filter(job -> states.contains(job.getState()))
+                    .sorted(Comparator.comparing(JobEntity::getCreatedAt))
+                    .findFirst();
+        });
     }
 
     @Test
@@ -101,7 +133,7 @@ class DefaultVideoProcessingServiceTest {
         assertThat(status.state()).isEqualTo(VideoJobState.COMPLETED);
         assertThat(status.youtubeVideoId()).isEqualTo("video-123");
         assertThat(status.youtubeVideoUrl()).isEqualTo("https://www.youtube.com/watch?v=video-123");
-        verify(uploader).generateVideo(anyString(), anyString(), eq(60), anyString());
+        verify(uploader).generateVideo(anyString(), anyString(), eq(60), anyString(), anyString(), any());
         verify(uploader).uploadToYouTube(anyString(), eq("Title"), eq("Description"), any(PublishOptions.class));
         verifyNoInteractions(compositionRenderer);
     }
@@ -187,7 +219,7 @@ class DefaultVideoProcessingServiceTest {
         when(uploaderFactory.create(youTubeService)).thenReturn(uploader);
         doThrow(new RuntimeException("ffmpeg failed"))
                 .when(uploader)
-                .generateVideo(anyString(), anyString(), anyInt(), anyString());
+                .generateVideo(anyString(), anyString(), anyInt(), anyString(), anyString(), any());
 
         String jobId = service.submitJob(
                 validImage(),
@@ -241,7 +273,7 @@ class DefaultVideoProcessingServiceTest {
         assertThat(status.youtubeVideoId()).isEqualTo("video-comp-123");
 
         ArgumentCaptor<CompositionRenderPlan> renderPlanCaptor = ArgumentCaptor.forClass(CompositionRenderPlan.class);
-        verify(compositionRenderer).renderComposition(renderPlanCaptor.capture(), any(Path.class));
+        verify(compositionRenderer).renderComposition(renderPlanCaptor.capture(), any(Path.class), anyString(), any());
         CompositionRenderPlan renderPlan = renderPlanCaptor.getValue();
         assertThat(renderPlan.outputPreset()).isEqualTo(OutputPreset.PORTRAIT_9_16);
         assertThat(renderPlan.scenes()).hasSize(1);
@@ -252,7 +284,7 @@ class DefaultVideoProcessingServiceTest {
     void submitCompositionJobMarksFailedWhenRenderFails() throws Exception {
         doThrow(new IOException("render failed"))
                 .when(compositionRenderer)
-                .renderComposition(any(CompositionRenderPlan.class), any(Path.class));
+                .renderComposition(any(CompositionRenderPlan.class), any(Path.class), anyString(), any());
 
         String jobId = service.submitCompositionJob(
                 validAssets(),
@@ -334,12 +366,7 @@ class DefaultVideoProcessingServiceTest {
             worker.start();
         };
 
-        DefaultVideoProcessingService blockingService = new DefaultVideoProcessingService(
-                youTubeServiceProvider,
-                uploaderFactory,
-                compositionRenderer,
-                blockingExecutor,
-                new SimpleMeterRegistry());
+        DefaultVideoProcessingService blockingService = createService(blockingExecutor);
 
         when(youTubeServiceProvider.getService()).thenReturn(youTubeService);
         when(uploaderFactory.create(youTubeService)).thenReturn(uploader);
@@ -373,6 +400,17 @@ class DefaultVideoProcessingServiceTest {
         releaseTask.countDown();
         assertThat(taskFinished.await(5, TimeUnit.SECONDS)).isTrue();
         assertThat(blockingService.getActiveJobStatus()).isEmpty();
+    }
+
+    private DefaultVideoProcessingService createService(TaskExecutor taskExecutor) {
+        return new DefaultVideoProcessingService(
+                youTubeServiceProvider,
+                uploaderFactory,
+                compositionRenderer,
+                taskExecutor,
+                jobRepository,
+                ffmpegProcessRunner,
+                new SimpleMeterRegistry());
     }
 
     private CompositionManifestRequest validCompositionManifest() {
