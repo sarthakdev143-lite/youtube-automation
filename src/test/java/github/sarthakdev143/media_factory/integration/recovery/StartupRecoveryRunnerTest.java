@@ -2,6 +2,7 @@ package github.sarthakdev143.media_factory.integration.recovery;
 
 import github.sarthakdev143.media_factory.config.StartupRecoveryRunner;
 import github.sarthakdev143.media_factory.model.PrivacyStatus;
+import github.sarthakdev143.media_factory.model.VideoJobStage;
 import github.sarthakdev143.media_factory.model.VideoJobState;
 import github.sarthakdev143.media_factory.persistence.VideoJob;
 import github.sarthakdev143.media_factory.persistence.VideoJobRepository;
@@ -49,6 +50,8 @@ class StartupRecoveryRunnerTest {
         VideoJob stillQueued = videoJobRepository.findById(queuedJob.getId()).orElseThrow();
 
         assertThat(recovered.getState()).isEqualTo(VideoJobState.FAILED);
+        assertThat(recovered.getJobStage()).isEqualTo(VideoJobStage.FAILED);
+        assertThat(recovered.getStageDetail()).isEqualTo("Application restarted during processing");
         assertThat(recovered.getErrorMessage()).isEqualTo("Application restarted during processing");
         assertThat(stillQueued.getState()).isEqualTo(VideoJobState.QUEUED);
     }
@@ -69,7 +72,12 @@ class StartupRecoveryRunnerTest {
         videoJob.setInputThumbnailPath(null);
         videoJob.setOutputPath(null);
         videoJob.setYoutubeVideoId(null);
+        videoJob.setJobStage(state == VideoJobState.PROCESSING ? VideoJobStage.GENERATING : VideoJobStage.QUEUED);
+        videoJob.setStageDetail(state == VideoJobState.PROCESSING ? "Generating video with FFmpeg." : "Queued.");
         videoJob.setProgressPercent(0);
+        videoJob.setGenerationProgressPercent(0);
+        videoJob.setUploadProgressPercent(0);
+        videoJob.setUploadState(null);
         videoJob.setErrorMessage(null);
         videoJob.setWarningMessage(null);
         videoJob.setDurationSeconds(120);

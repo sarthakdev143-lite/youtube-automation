@@ -90,6 +90,15 @@ Successful response: `200 OK`
   "message": "Video generated and uploaded successfully.",
   "createdAt": "2026-02-12T18:25:43.129Z",
   "updatedAt": "2026-02-12T18:26:07.984Z",
+  "progressPercent": 100,
+  "progressReport": {
+    "stage": "COMPLETED",
+    "detail": "Video generated and uploaded successfully.",
+    "overallPercent": 100,
+    "generationPercent": 100,
+    "uploadPercent": 100,
+    "uploadState": "COMPLETE"
+  },
   "privacyStatus": "PRIVATE",
   "tags": ["music", "ambient"],
   "categoryId": "10",

@@ -40,6 +40,7 @@ public class VideoController {
     private static final int MAX_TAGS = 20;
     private static final int MAX_TAG_LENGTH = 50;
     private static final int MIN_PUBLISH_DELAY_SECONDS = 5 * 60;
+    private static final long MAX_THUMBNAIL_BYTES = 2L * 1024 * 1024;
     private static final Set<String> ALLOWED_THUMBNAIL_TYPES = Set.of("image/jpeg", "image/png");
     private static final Pattern CATEGORY_ID_PATTERN = Pattern.compile("^\\d{1,3}$");
 
@@ -298,6 +299,10 @@ public class VideoController {
         String contentType = thumbnail.getContentType();
         if (contentType == null || !ALLOWED_THUMBNAIL_TYPES.contains(contentType.toLowerCase(Locale.ROOT))) {
             throw new IllegalArgumentException("thumbnail must have content type image/jpeg or image/png.");
+        }
+
+        if (thumbnail.getSize() > MAX_THUMBNAIL_BYTES) {
+            throw new IllegalArgumentException("thumbnail must be <= 2MB (YouTube limit).");
         }
     }
 

@@ -188,7 +188,14 @@
 <script>
     const form = document.getElementById("videoForm");
     const status = document.getElementById("status");
+    const ACTIVE_JOB_STORAGE_KEY = "mediaFactory.activeJobId";
+    const FORM_STATE_STORAGE_KEY = "mediaFactory.formState";
+    const FORM_PERSIST_IDS = ["duration", "title", "description", "privacyStatus", "tags", "categoryId", "publishAt"];
     let activePoll = null;
+
+    restoreFormState();
+    attachFormPersistence();
+    restoreJobTracking();
 
     form.addEventListener("submit", async (e) => {
         e.preventDefault();
@@ -258,6 +265,8 @@
             }
 
             const submission = await response.json();
+            saveActiveJobId(submission.jobId);
+            persistFormState();
             status.innerText = `Job ${submission.jobId}: ${submission.state}. ${submission.message}`;
             pollJobStatus(submission.jobId);
         } catch (err) {
@@ -267,17 +276,198 @@
     });
 
     function renderStatus(job) {
-        let message = `Job ${job.jobId}: ${job.state}. ${job.message}`;
+        const lines = [];
+        lines.push(`Job ${escapeHtml(job.jobId)}: ${escapeHtml(job.state)}`);
+
+        if (job.message) {
+            lines.push(escapeHtml(job.message));
+        }
+
+        if (job.progressReport) {
+            const progress = job.progressReport;
+            const stageLine = progress.detail
+                ? `Stage: ${escapeHtml(progress.stage)} - ${escapeHtml(progress.detail)}`
+                : `Stage: ${escapeHtml(progress.stage)}`;
+            lines.push(stageLine);
+            lines.push(`Overall Progress: ${progress.overallPercent}%`);
+            lines.push(`Generation Progress: ${progress.generationPercent}%`);
+
+            const uploadStateSuffix = progress.uploadState
+                ? ` (${escapeHtml(progress.uploadState)})`
+                : "";
+            lines.push(`Upload Progress: ${progress.uploadPercent}%${uploadStateSuffix}`);
+        } else if (typeof job.progressPercent === "number") {
+            lines.push(`Progress: ${job.progressPercent}%`);
+        }
+
+        if (job.updatedAt) {
+            lines.push(`Last Updated: ${escapeHtml(job.updatedAt)}`);
+        }
 
         if (job.youtubeVideoUrl) {
-            message += `\nVideo URL: <a href="${job.youtubeVideoUrl}" target="_blank" rel="noopener noreferrer">${job.youtubeVideoUrl}</a>`;
+            const safeUrl = encodeURI(job.youtubeVideoUrl);
+            lines.push(`Video URL: <a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${escapeHtml(job.youtubeVideoUrl)}</a>`);
         }
 
         if (job.warningMessage) {
-            message += `\nWarning: ${job.warningMessage}`;
+            lines.push(`Warning: ${escapeHtml(job.warningMessage)}`);
         }
 
-        status.innerHTML = message;
+        status.innerHTML = lines.join("<br>");
+    }
+
+    async function restoreJobTracking() {
+        const savedJobId = getActiveJobId();
+        if (savedJobId) {
+            status.innerText = `Resuming status tracking for job ${savedJobId}...`;
+            const restored = await fetchAndHandleJobStatus(savedJobId, true);
+            if (restored) {
+                return;
+            }
+            clearActiveJobId();
+        }
+
+        await findAndTrackActiveJob();
+    }
+
+    async function findAndTrackActiveJob() {
+        try {
+            const response = await fetch("/api/video/status/active");
+            if (!response.ok) {
+                return;
+            }
+
+            const contentType = response.headers.get("content-type") || "";
+            if (!contentType.includes("application/json")) {
+                return;
+            }
+
+            const activeJob = await response.json();
+            if (!activeJob || !activeJob.jobId) {
+                return;
+            }
+
+            saveActiveJobId(activeJob.jobId);
+            renderStatus(activeJob);
+            if (!isTerminalState(activeJob.state)) {
+                pollJobStatus(activeJob.jobId);
+            }
+        } catch (err) {
+            console.error("Active job restore failed:", err);
+        }
+    }
+
+    function isTerminalState(state) {
+        return state === "COMPLETED" || state === "FAILED";
+    }
+
+    function getActiveJobId() {
+        try {
+            return localStorage.getItem(ACTIVE_JOB_STORAGE_KEY);
+        } catch (err) {
+            return null;
+        }
+    }
+
+    function saveActiveJobId(jobId) {
+        try {
+            localStorage.setItem(ACTIVE_JOB_STORAGE_KEY, jobId);
+        } catch (err) {
+            console.error("Failed to persist active job id:", err);
+        }
+    }
+
+    function clearActiveJobId() {
+        try {
+            localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY);
+        } catch (err) {
+            console.error("Failed to clear active job id:", err);
+        }
+    }
+
+    function attachFormPersistence() {
+        for (const id of FORM_PERSIST_IDS) {
+            const field = document.getElementById(id);
+            if (!field) {
+                continue;
+            }
+
+            const eventName = field.tagName === "SELECT" || field.type === "datetime-local" ? "change" : "input";
+            field.addEventListener(eventName, persistFormState);
+        }
+    }
+
+    function persistFormState() {
+        try {
+            const payload = {};
+            for (const id of FORM_PERSIST_IDS) {
+                const field = document.getElementById(id);
+                if (!field) {
+                    continue;
+                }
+                payload[id] = field.value;
+            }
+            localStorage.setItem(FORM_STATE_STORAGE_KEY, JSON.stringify(payload));
+        } catch (err) {
+            console.error("Failed to persist form state:", err);
+        }
+    }
+
+    function restoreFormState() {
+        try {
+            const raw = localStorage.getItem(FORM_STATE_STORAGE_KEY);
+            if (!raw) {
+                return;
+            }
+
+            const payload = JSON.parse(raw);
+            for (const id of FORM_PERSIST_IDS) {
+                const field = document.getElementById(id);
+                if (!field || payload[id] === undefined || payload[id] === null) {
+                    continue;
+                }
+                field.value = payload[id];
+            }
+        } catch (err) {
+            console.error("Failed to restore form state:", err);
+        }
+    }
+
+    async function fetchAndHandleJobStatus(jobId, shouldPollWhenActive) {
+        try {
+            const response = await fetch(`/api/video/status/${jobId}`);
+            if (!response.ok) {
+                return false;
+            }
+
+            const contentType = response.headers.get("content-type") || "";
+            if (!contentType.includes("application/json")) {
+                return false;
+            }
+
+            const job = await response.json();
+            renderStatus(job);
+
+            if (isTerminalState(job.state)) {
+                clearActiveJobId();
+            } else if (shouldPollWhenActive) {
+                pollJobStatus(jobId);
+            }
+
+            return true;
+        } catch (err) {
+            console.error("Failed to fetch job status:", err);
+            return false;
+        }
+    }
+
+    function escapeHtml(value) {
+        return String(value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
     }
 
     function pollJobStatus(jobId) {
@@ -285,11 +475,14 @@
             clearInterval(activePoll);
         }
 
-        activePoll = setInterval(async () => {
+        const poll = async () => {
             try {
                 const response = await fetch(`/api/video/status/${jobId}`);
                 if (!response.ok) {
                     status.innerText = await response.text();
+                    if (response.status === 404) {
+                        clearActiveJobId();
+                    }
                     clearInterval(activePoll);
                     activePoll = null;
                     return;
@@ -298,7 +491,8 @@
                 const job = await response.json();
                 renderStatus(job);
 
-                if (job.state === "COMPLETED" || job.state === "FAILED") {
+                if (isTerminalState(job.state)) {
+                    clearActiveJobId();
                     clearInterval(activePoll);
                     activePoll = null;
                 }
@@ -307,7 +501,10 @@
                 clearInterval(activePoll);
                 activePoll = null;
             }
-        }, 3000);
+        };
+
+        poll();
+        activePoll = setInterval(poll, 3000);
     }
 </script>
 

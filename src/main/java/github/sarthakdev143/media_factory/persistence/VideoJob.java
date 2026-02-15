@@ -1,6 +1,7 @@
 package github.sarthakdev143.media_factory.persistence;
 
 import github.sarthakdev143.media_factory.model.PrivacyStatus;
+import github.sarthakdev143.media_factory.model.VideoJobStage;
 import github.sarthakdev143.media_factory.model.VideoJobState;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -67,8 +68,25 @@ public class VideoJob {
     @Column(name = "youtube_video_id", length = 64)
     private String youtubeVideoId;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "job_stage", length = 64)
+    private VideoJobStage jobStage;
+
+    @Lob
+    @Column(name = "stage_detail", columnDefinition = "TEXT")
+    private String stageDetail;
+
     @Column(name = "progress_percent", nullable = false)
     private int progressPercent;
+
+    @Column(name = "generation_progress_percent")
+    private Integer generationProgressPercent;
+
+    @Column(name = "upload_progress_percent")
+    private Integer uploadProgressPercent;
+
+    @Column(name = "upload_state", length = 64)
+    private String uploadState;
 
     @Lob
     @Column(name = "error_message", columnDefinition = "TEXT")
@@ -212,12 +230,52 @@ public class VideoJob {
         this.youtubeVideoId = youtubeVideoId;
     }
 
+    public VideoJobStage getJobStage() {
+        return jobStage;
+    }
+
+    public void setJobStage(VideoJobStage jobStage) {
+        this.jobStage = jobStage;
+    }
+
+    public String getStageDetail() {
+        return stageDetail;
+    }
+
+    public void setStageDetail(String stageDetail) {
+        this.stageDetail = stageDetail;
+    }
+
     public int getProgressPercent() {
         return progressPercent;
     }
 
     public void setProgressPercent(int progressPercent) {
         this.progressPercent = progressPercent;
+    }
+
+    public Integer getGenerationProgressPercent() {
+        return generationProgressPercent;
+    }
+
+    public void setGenerationProgressPercent(Integer generationProgressPercent) {
+        this.generationProgressPercent = generationProgressPercent;
+    }
+
+    public Integer getUploadProgressPercent() {
+        return uploadProgressPercent;
+    }
+
+    public void setUploadProgressPercent(Integer uploadProgressPercent) {
+        this.uploadProgressPercent = uploadProgressPercent;
+    }
+
+    public String getUploadState() {
+        return uploadState;
+    }
+
+    public void setUploadState(String uploadState) {
+        this.uploadState = uploadState;
     }
 
     public String getErrorMessage() {

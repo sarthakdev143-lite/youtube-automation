@@ -1,6 +1,7 @@
 package github.sarthakdev143.media_factory.config;
 
 import github.sarthakdev143.media_factory.model.VideoJobState;
+import github.sarthakdev143.media_factory.model.VideoJobStage;
 import github.sarthakdev143.media_factory.persistence.VideoJob;
 import github.sarthakdev143.media_factory.persistence.VideoJobRepository;
 import org.slf4j.Logger;
@@ -32,6 +33,8 @@ public class StartupRecoveryRunner implements ApplicationRunner {
         List<VideoJob> interruptedJobs = videoJobRepository.findAllByState(VideoJobState.PROCESSING);
         for (VideoJob job : interruptedJobs) {
             job.setState(VideoJobState.FAILED);
+            job.setJobStage(VideoJobStage.FAILED);
+            job.setStageDetail(RECOVERY_ERROR);
             job.setErrorMessage(RECOVERY_ERROR);
         }
         if (!interruptedJobs.isEmpty()) {

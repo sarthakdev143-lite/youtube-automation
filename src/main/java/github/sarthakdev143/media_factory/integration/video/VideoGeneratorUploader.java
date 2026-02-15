@@ -12,6 +12,7 @@ import com.google.api.services.youtube.model.VideoStatus;
 import github.sarthakdev143.media_factory.integration.youtube.YouTubeServiceFactory;
 import github.sarthakdev143.media_factory.model.PrivacyStatus;
 import github.sarthakdev143.media_factory.model.PublishOptions;
+import github.sarthakdev143.media_factory.model.UploadProgress;
 import github.sarthakdev143.media_factory.model.UploadResult;
 
 import java.io.BufferedReader;
@@ -27,6 +28,7 @@ public class VideoGeneratorUploader {
 
     private static final String FFMPEG_PATH_ENV = "FFMPEG_PATH";
     private static final String DEFAULT_FFMPEG_BINARY = "ffmpeg";
+    private static final long MAX_THUMBNAIL_BYTES = 2L * 1024 * 1024;
 
     // YouTube API service (you must configure OAuth2)
     private final YouTube youtubeService;
@@ -121,7 +123,7 @@ public class VideoGeneratorUploader {
             String title,
             String description,
             PublishOptions publishOptions,
-            Consumer<Double> uploadProgressListener) throws IOException {
+            Consumer<UploadProgress> uploadProgressListener) throws IOException {
         File videoFile = new File(videoPath);
         PublishOptions resolvedOptions = publishOptions == null
                 ? new PublishOptions(PrivacyStatus.PRIVATE, List.of(), null, null)
@@ -155,7 +157,7 @@ public class VideoGeneratorUploader {
             String title,
             String description,
             PublishOptions publishOptions,
-            Consumer<Double> uploadProgressListener) throws IOException {
+            Consumer<UploadProgress> uploadProgressListener) throws IOException {
         Video videoObjectDefiningMetadata = new Video();
         VideoStatus status = new VideoStatus();
         status.setPrivacyStatus(publishOptions.privacyStatus().toApiValue());
@@ -183,7 +185,10 @@ public class VideoGeneratorUploader {
             mediaHttpUploader.setDirectUploadEnabled(false);
             mediaHttpUploader.setChunkSize(MediaHttpUploader.MINIMUM_CHUNK_SIZE * 8);
             if (uploadProgressListener != null) {
-                mediaHttpUploader.setProgressListener(uploader -> uploadProgressListener.accept(uploader.getProgress()));
+                mediaHttpUploader.setProgressListener(uploader -> uploadProgressListener.accept(
+                        new UploadProgress(
+                                uploader.getUploadState() == null ? "UNKNOWN" : uploader.getUploadState().name(),
+                                uploader.getProgress())));
             }
         }
         return request.execute();
@@ -202,7 +207,16 @@ public class VideoGeneratorUploader {
     }
 
     public void uploadThumbnail(String videoId, String thumbnailPath, String thumbnailContentType) throws IOException {
-        FileContent mediaContent = new FileContent(thumbnailContentType, new File(thumbnailPath));
+        File thumbnailFile = new File(thumbnailPath);
+        long sizeBytes = thumbnailFile.length();
+        if (sizeBytes <= 0) {
+            throw new IllegalArgumentException("Thumbnail file is empty or missing.");
+        }
+        if (sizeBytes > MAX_THUMBNAIL_BYTES) {
+            throw new IllegalArgumentException("Thumbnail exceeds YouTube 2MB limit (" + sizeBytes + " bytes).");
+        }
+
+        FileContent mediaContent = new FileContent(thumbnailContentType, thumbnailFile);
         youtubeService.thumbnails().set(videoId, mediaContent).execute();
     }
 

@@ -5,6 +5,8 @@ import github.sarthakdev143.media_factory.integration.youtube.YouTubeServiceProv
 import github.sarthakdev143.media_factory.model.PrivacyStatus;
 import github.sarthakdev143.media_factory.model.PublishOptions;
 import github.sarthakdev143.media_factory.model.UploadResult;
+import github.sarthakdev143.media_factory.model.VideoJobProgressReport;
+import github.sarthakdev143.media_factory.model.VideoJobStage;
 import github.sarthakdev143.media_factory.model.VideoJobState;
 import github.sarthakdev143.media_factory.model.VideoJobStatus;
 import github.sarthakdev143.media_factory.persistence.VideoJob;
@@ -55,6 +57,9 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
     private static final int MAX_DURATION_SECONDS = 21_600;
     private static final int DEFAULT_OUTPUT_FRAME_RATE = 2;
     private static final int SHUTDOWN_GRACE_SECONDS = 5;
+    private static final int ENCODING_WEIGHT_PERCENT = 80;
+    private static final int UPLOAD_WEIGHT_PERCENT = 19;
+    private static final int THUMBNAIL_WEIGHT_PERCENT = 1;
 
     private final YouTubeServiceProvider youTubeServiceProvider;
     private final VideoGeneratorUploaderFactory uploaderFactory;
@@ -182,6 +187,8 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
                     VideoJob videoJob = new VideoJob();
                     videoJob.setId(jobId);
                     videoJob.setState(VideoJobState.QUEUED);
+                    videoJob.setJobStage(VideoJobStage.QUEUED);
+                    videoJob.setStageDetail("Waiting for worker to pick up this job.");
                     videoJob.setTitle(sanitizedTitle);
                     videoJob.setDescription(sanitizedDescription);
                     videoJob.setPrivacyStatus(normalizedOptions.privacyStatus());
@@ -193,6 +200,9 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
                     videoJob.setInputThumbnailPath(thumbnailPathString);
                     videoJob.setDurationSeconds(durationSeconds);
                     videoJob.setProgressPercent(0);
+                    videoJob.setGenerationProgressPercent(0);
+                    videoJob.setUploadProgressPercent(0);
+                    videoJob.setUploadState(null);
                     videoJob.setErrorMessage(null);
                     videoJob.setWarningMessage(null);
                     videoJobRepository.save(videoJob);
@@ -294,8 +304,14 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
             }
             VideoJob videoJob = queued.get();
             videoJob.setState(VideoJobState.PROCESSING);
+            videoJob.setJobStage(VideoJobStage.PREPARING);
+            videoJob.setStageDetail("Preparing inputs and output paths.");
             videoJob.setErrorMessage(null);
+            videoJob.setWarningMessage(null);
             videoJob.setProgressPercent(0);
+            videoJob.setGenerationProgressPercent(0);
+            videoJob.setUploadProgressPercent(0);
+            videoJob.setUploadState(null);
             videoJobRepository.save(videoJob);
             return Optional.of(videoJob.getId());
         });
@@ -308,31 +324,38 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
         }
 
         activeProcessingJobId.set(jobId);
-        AtomicInteger lastPersistedPercent = new AtomicInteger(-1);
-        AtomicLong lastPersistedAtMs = new AtomicLong(0L);
+        AtomicInteger lastPersistedGenerationPercent = new AtomicInteger(-1);
+        AtomicLong lastPersistedGenerationAtMs = new AtomicLong(0L);
+        AtomicInteger lastPersistedUploadPercent = new AtomicInteger(-1);
+        AtomicLong lastPersistedUploadAtMs = new AtomicLong(0L);
+        AtomicReference<String> lastPersistedUploadState = new AtomicReference<>();
 
         Path outputPath = outputDirectory.resolve(jobId + ".mp4").toAbsolutePath().normalize();
         Path logPath = logDirectory.resolve(jobId + ".ffmpeg.log").toAbsolutePath().normalize();
         updateOutputPath(jobId, outputPath);
+        transitionStage(jobId, VideoJobStage.PREPARING, "Preparing inputs and output path.");
 
         logger.info("[JOB_STARTED id={} durationSeconds={}]", jobId, job.getDurationSeconds());
 
         try {
+            transitionStage(jobId, VideoJobStage.GENERATING, "Generating video with FFmpeg.");
             ffmpegService.runEncoding(
                     Path.of(job.getInputImagePath()),
                     Path.of(job.getInputAudioPath()),
                     outputPath,
                     job.getDurationSeconds(),
                     outputFrameRate > 0 ? outputFrameRate : DEFAULT_OUTPUT_FRAME_RATE,
-                    progressPercent -> persistProgressIfNeeded(
+                    progressPercent -> persistGenerationProgressIfNeeded(
                             jobId,
                             progressPercent,
-                            lastPersistedPercent,
-                            lastPersistedAtMs),
+                            lastPersistedGenerationPercent,
+                            lastPersistedGenerationAtMs),
                     process -> activeFfmpegProcess.set(process),
                     logPath);
 
-            persistProgress(jobId, 100);
+            persistGenerationProgress(jobId, 100);
+            transitionStage(jobId, VideoJobStage.UPLOADING_VIDEO, "Video generated. Uploading to YouTube.");
+            persistUploadProgress(jobId, 0, "NOT_STARTED");
 
             VideoGeneratorUploader uploader = uploaderFactory.create(youTubeServiceProvider.getService());
             UploadResult uploadResult = uploader.uploadToYouTube(
@@ -341,25 +364,40 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
                     job.getDescription(),
                     new PublishOptions(job.getPrivacyStatus(), deserializeTags(job.getTags()), job.getCategoryId(), job.getPublishAt()),
                     progress -> {
-                        int uploadPercent = (int) Math.round(progress * 100.0d);
-                        logger.info("[UPLOAD id={} percent={}]", jobId, uploadPercent);
+                        int uploadPercent = (int) Math.round(progress.progressFraction() * 100.0d);
+                        persistUploadProgressIfNeeded(
+                                jobId,
+                                uploadPercent,
+                                progress.state(),
+                                lastPersistedUploadPercent,
+                                lastPersistedUploadAtMs,
+                                lastPersistedUploadState);
+                        logger.info("[UPLOAD id={} state={} percent={}]", jobId, progress.state(), uploadPercent);
                     });
+            persistUploadProgress(jobId, 100, "MEDIA_COMPLETE");
 
             String warningMessage = uploadResult.warningMessage();
             if (job.getInputThumbnailPath() != null) {
+                transitionStage(jobId, VideoJobStage.UPLOADING_THUMBNAIL, "Uploading custom thumbnail to YouTube.");
                 try {
                     uploader.uploadThumbnail(
                             uploadResult.videoId(),
                             job.getInputThumbnailPath(),
                             guessContentType(job.getInputThumbnailPath()));
                 } catch (Exception thumbnailEx) {
+                    String thumbnailFailureReason = safeFailureMessage(thumbnailEx);
                     warningMessage = appendWarning(
                             warningMessage,
-                            "Video uploaded, but thumbnail upload failed.");
-                    logger.warn("Thumbnail upload failed for job {}", jobId, thumbnailEx);
+                            "Video uploaded, but thumbnail upload failed: " + thumbnailFailureReason);
+                    if (thumbnailEx instanceof IllegalArgumentException) {
+                        logger.warn("Thumbnail upload skipped for job {}: {}", jobId, thumbnailFailureReason);
+                    } else {
+                        logger.warn("Thumbnail upload failed for job {}", jobId, thumbnailEx);
+                    }
                 }
             }
 
+            transitionStage(jobId, VideoJobStage.FINALIZING, "Finalizing completed job status.");
             markJobCompleted(jobId, uploadResult.videoId(), warningMessage);
             cleanupOnSuccess(job, outputPath);
         } catch (Exception ex) {
@@ -372,7 +410,7 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
         }
     }
 
-    private void persistProgressIfNeeded(
+    private void persistGenerationProgressIfNeeded(
             UUID jobId,
             int newProgressPercent,
             AtomicInteger lastPersistedPercent,
@@ -393,12 +431,12 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
 
         if (lastPersistedPercent.compareAndSet(previousPercent, boundedProgress)) {
             lastPersistedAtMs.set(now);
-            persistProgress(jobId, boundedProgress);
+            persistGenerationProgress(jobId, boundedProgress);
             logger.info("[ENCODING id={} progress={}]", jobId, boundedProgress);
         }
     }
 
-    private void persistProgress(UUID jobId, int progressPercent) {
+    private void persistGenerationProgress(UUID jobId, int generationProgressPercent) {
         transactionTemplate.executeWithoutResult(tx -> {
             VideoJob job = videoJobRepository.findById(jobId).orElse(null);
             if (job == null) {
@@ -407,7 +445,87 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
             if (job.getState() != VideoJobState.PROCESSING) {
                 return;
             }
-            job.setProgressPercent(Math.max(0, Math.min(100, progressPercent)));
+            int boundedGenerationProgress = clampPercent(generationProgressPercent);
+            job.setJobStage(VideoJobStage.GENERATING);
+            job.setGenerationProgressPercent(boundedGenerationProgress);
+            job.setProgressPercent(calculateOverallProgressForGeneration(boundedGenerationProgress));
+            videoJobRepository.save(job);
+        });
+    }
+
+    private void persistUploadProgressIfNeeded(
+            UUID jobId,
+            int newUploadPercent,
+            String uploadState,
+            AtomicInteger lastPersistedPercent,
+            AtomicLong lastPersistedAtMs,
+            AtomicReference<String> lastPersistedUploadState) {
+        int boundedProgress = clampPercent(newUploadPercent);
+        String normalizedState = normalizeUploadState(uploadState);
+        long now = System.currentTimeMillis();
+        int previousPercent = lastPersistedPercent.get();
+        long previousPersistTime = lastPersistedAtMs.get();
+        String previousState = lastPersistedUploadState.get();
+
+        boolean stateChanged = previousState == null || !previousState.equals(normalizedState);
+        boolean shouldPersist = previousPercent < 0
+                || boundedProgress == 100
+                || stateChanged
+                || Math.abs(boundedProgress - previousPercent) > 1
+                || now - previousPersistTime >= progressPersistIntervalMs;
+
+        if (!shouldPersist) {
+            return;
+        }
+
+        if (lastPersistedPercent.compareAndSet(previousPercent, boundedProgress)) {
+            lastPersistedUploadState.set(normalizedState);
+            lastPersistedAtMs.set(now);
+            persistUploadProgress(jobId, boundedProgress, normalizedState);
+        }
+    }
+
+    private void persistUploadProgress(UUID jobId, int uploadProgressPercent, String uploadState) {
+        transactionTemplate.executeWithoutResult(tx -> {
+            VideoJob job = videoJobRepository.findById(jobId).orElse(null);
+            if (job == null) {
+                return;
+            }
+            if (job.getState() != VideoJobState.PROCESSING) {
+                return;
+            }
+
+            int boundedUploadProgress = clampPercent(uploadProgressPercent);
+            job.setJobStage(VideoJobStage.UPLOADING_VIDEO);
+            job.setUploadProgressPercent(boundedUploadProgress);
+            job.setUploadState(normalizeUploadState(uploadState));
+            if (valueOrZero(job.getGenerationProgressPercent()) < 100) {
+                job.setGenerationProgressPercent(100);
+            }
+            job.setProgressPercent(calculateOverallProgressForUpload(boundedUploadProgress));
+            videoJobRepository.save(job);
+        });
+    }
+
+    private void transitionStage(UUID jobId, VideoJobStage stage, String detail) {
+        transactionTemplate.executeWithoutResult(tx -> {
+            VideoJob job = videoJobRepository.findById(jobId).orElse(null);
+            if (job == null) {
+                return;
+            }
+            if (job.getState() != VideoJobState.PROCESSING) {
+                return;
+            }
+            job.setJobStage(stage);
+            job.setStageDetail(detail);
+            if (stage == VideoJobStage.PREPARING) {
+                job.setProgressPercent(0);
+            } else if (stage == VideoJobStage.UPLOADING_THUMBNAIL) {
+                int thumbnailStartProgress = Math.max(
+                        0,
+                        ENCODING_WEIGHT_PERCENT + UPLOAD_WEIGHT_PERCENT + THUMBNAIL_WEIGHT_PERCENT - 1);
+                job.setProgressPercent(thumbnailStartProgress);
+            }
             videoJobRepository.save(job);
         });
     }
@@ -419,8 +537,13 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
                 return;
             }
             job.setState(VideoJobState.COMPLETED);
+            job.setJobStage(VideoJobStage.COMPLETED);
+            job.setStageDetail("Video generated and uploaded successfully.");
             job.setYoutubeVideoId(youtubeVideoId);
             job.setProgressPercent(100);
+            job.setGenerationProgressPercent(100);
+            job.setUploadProgressPercent(100);
+            job.setUploadState("COMPLETE");
             job.setWarningMessage(warningMessage);
             job.setErrorMessage(null);
             videoJobRepository.save(job);
@@ -434,6 +557,8 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
                 return;
             }
             job.setState(VideoJobState.FAILED);
+            job.setJobStage(VideoJobStage.FAILED);
+            job.setStageDetail(errorMessage);
             job.setErrorMessage(errorMessage);
             videoJobRepository.save(job);
         });
@@ -446,6 +571,8 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
                 return;
             }
             job.setState(VideoJobState.FAILED);
+            job.setJobStage(VideoJobStage.FAILED);
+            job.setStageDetail(errorMessage);
             job.setErrorMessage(errorMessage);
             videoJobRepository.save(job);
         });
@@ -516,6 +643,7 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
     }
 
     private VideoJobStatus toStatus(VideoJob videoJob) {
+        VideoJobProgressReport progressReport = buildProgressReport(videoJob);
         return new VideoJobStatus(
                 videoJob.getId().toString(),
                 videoJob.getState(),
@@ -523,6 +651,7 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
                 videoJob.getCreatedAt(),
                 videoJob.getUpdatedAt(),
                 videoJob.getProgressPercent(),
+                progressReport,
                 videoJob.getPrivacyStatus(),
                 deserializeTags(videoJob.getTags()),
                 videoJob.getCategoryId(),
@@ -533,15 +662,67 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
     }
 
     private String statusMessage(VideoJob job) {
+        VideoJobProgressReport progressReport = buildProgressReport(job);
         return switch (job.getState()) {
-            case QUEUED -> "Job queued.";
-            case PROCESSING -> "Generating video and uploading to YouTube. " + job.getProgressPercent() + "%";
+            case QUEUED -> "Job queued. Waiting for worker to pick it up.";
+            case PROCESSING -> formatProcessingMessage(progressReport);
             case COMPLETED -> job.getWarningMessage() == null
                     ? "Video generated and uploaded successfully."
                     : "Video generated and uploaded with warnings.";
             case FAILED -> job.getErrorMessage() == null
                     ? "Video processing failed. Check server logs."
                     : job.getErrorMessage();
+        };
+    }
+
+    private String formatProcessingMessage(VideoJobProgressReport progressReport) {
+        String detail = progressReport.detail();
+        String prefix = detail == null || detail.isBlank()
+                ? "Processing job."
+                : detail;
+        return prefix
+                + " Overall "
+                + progressReport.overallPercent()
+                + "% (generation "
+                + progressReport.generationPercent()
+                + "%, upload "
+                + progressReport.uploadPercent()
+                + "%).";
+    }
+
+    private VideoJobProgressReport buildProgressReport(VideoJob job) {
+        VideoJobStage stage = resolveStage(job);
+        String detail = job.getStageDetail();
+        int overallPercent = clampPercent(job.getProgressPercent());
+        int generationPercent = valueOrZero(job.getGenerationProgressPercent());
+        int uploadPercent = valueOrZero(job.getUploadProgressPercent());
+
+        if (stage == VideoJobStage.COMPLETED) {
+            overallPercent = 100;
+            generationPercent = 100;
+            uploadPercent = 100;
+        } else if (stage == VideoJobStage.FAILED && detail == null) {
+            detail = job.getErrorMessage();
+        }
+
+        return new VideoJobProgressReport(
+                stage,
+                detail,
+                overallPercent,
+                generationPercent,
+                uploadPercent,
+                normalizeUploadState(job.getUploadState()));
+    }
+
+    private VideoJobStage resolveStage(VideoJob job) {
+        if (job.getJobStage() != null) {
+            return job.getJobStage();
+        }
+        return switch (job.getState()) {
+            case QUEUED -> VideoJobStage.QUEUED;
+            case PROCESSING -> VideoJobStage.PREPARING;
+            case COMPLETED -> VideoJobStage.COMPLETED;
+            case FAILED -> VideoJobStage.FAILED;
         };
     }
 
@@ -672,6 +853,38 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
             return null;
         }
         return "https://www.youtube.com/watch?v=" + youtubeVideoId;
+    }
+
+    private int calculateOverallProgressForGeneration(int generationPercent) {
+        int boundedGeneration = clampPercent(generationPercent);
+        return (int) Math.round((boundedGeneration / 100.0d) * ENCODING_WEIGHT_PERCENT);
+    }
+
+    private int calculateOverallProgressForUpload(int uploadPercent) {
+        int boundedUpload = clampPercent(uploadPercent);
+        int uploadContribution = (int) Math.round((boundedUpload / 100.0d) * UPLOAD_WEIGHT_PERCENT);
+        return Math.min(ENCODING_WEIGHT_PERCENT + UPLOAD_WEIGHT_PERCENT, ENCODING_WEIGHT_PERCENT + uploadContribution);
+    }
+
+    private int clampPercent(int value) {
+        if (value < 0) {
+            return 0;
+        }
+        return Math.min(value, 100);
+    }
+
+    private int valueOrZero(Integer value) {
+        if (value == null) {
+            return 0;
+        }
+        return clampPercent(value);
+    }
+
+    private String normalizeUploadState(String uploadState) {
+        if (uploadState == null || uploadState.isBlank()) {
+            return null;
+        }
+        return uploadState.trim();
     }
 
     private String appendWarning(String existing, String additional) {

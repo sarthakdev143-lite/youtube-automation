@@ -2,6 +2,8 @@ package github.sarthakdev143.media_factory.controller;
 
 import github.sarthakdev143.media_factory.model.PrivacyStatus;
 import github.sarthakdev143.media_factory.model.PublishOptions;
+import github.sarthakdev143.media_factory.model.VideoJobProgressReport;
+import github.sarthakdev143.media_factory.model.VideoJobStage;
 import github.sarthakdev143.media_factory.model.VideoJobState;
 import github.sarthakdev143.media_factory.model.VideoJobStatus;
 import github.sarthakdev143.media_factory.service.VideoProcessingService;
@@ -227,6 +229,27 @@ class VideoControllerTest {
     }
 
     @Test
+    void generateReturnsBadRequestForOversizedThumbnail() throws Exception {
+        MockMultipartFile oversizedThumbnail = new MockMultipartFile(
+                "thumbnail",
+                "thumbnail.jpg",
+                "image/jpeg",
+                new byte[2_097_153]);
+
+        mockMvc.perform(multipart("/api/video/generate")
+                        .file(validImage())
+                        .file(validAudio())
+                        .file(oversizedThumbnail)
+                        .param("duration", "60")
+                        .param("title", "My title")
+                        .param("description", "My description"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().string(containsString("thumbnail must be <= 2MB")));
+
+        verifyNoInteractions(videoProcessingService);
+    }
+
+    @Test
     void getStatusReturnsCurrentJobState() throws Exception {
         VideoJobStatus jobStatus = new VideoJobStatus(
                 "job-123",
@@ -234,6 +257,13 @@ class VideoControllerTest {
                 "Generating video and uploading to YouTube.",
                 Instant.parse("2026-01-01T00:00:00Z"),
                 Instant.parse("2026-01-01T00:00:05Z"),
+                new VideoJobProgressReport(
+                        VideoJobStage.UPLOADING_VIDEO,
+                        "Uploading generated video to YouTube.",
+                        87,
+                        100,
+                        37,
+                        "MEDIA_IN_PROGRESS"),
                 PrivacyStatus.PRIVATE,
                 List.of("music"),
                 "10",
@@ -247,6 +277,8 @@ class VideoControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.jobId").value("job-123"))
                 .andExpect(jsonPath("$.state").value("PROCESSING"))
+                .andExpect(jsonPath("$.progressReport.stage").value("UPLOADING_VIDEO"))
+                .andExpect(jsonPath("$.progressReport.uploadPercent").value(37))
                 .andExpect(jsonPath("$.youtubeVideoUrl").value("https://www.youtube.com/watch?v=video-123"))
                 .andExpect(jsonPath("$.warningMessage").value("Thumbnail upload failed"));
     }
