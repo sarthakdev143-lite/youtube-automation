@@ -133,7 +133,7 @@
 
             <div>
                 <label for="duration">Duration (seconds)</label>
-                <input type="number" id="duration" min="1" max="36000" required>
+                <input type="number" id="duration" min="1" max="21600" required>
             </div>
 
             <div>
@@ -270,14 +270,14 @@
         let message = `Job ${job.jobId}: ${job.state}. ${job.message}`;
 
         if (job.youtubeVideoUrl) {
-            message += `\nVideo URL: ${job.youtubeVideoUrl}`;
+            message += `\nVideo URL: <a href="${job.youtubeVideoUrl}" target="_blank" rel="noopener noreferrer">${job.youtubeVideoUrl}</a>`;
         }
 
         if (job.warningMessage) {
             message += `\nWarning: ${job.warningMessage}`;
         }
 
-        status.innerText = message;
+        status.innerHTML = message;
     }
 
     function pollJobStatus(jobId) {

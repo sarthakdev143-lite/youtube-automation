@@ -4,6 +4,7 @@ import com.google.api.client.http.FileContent;
 import com.google.api.client.util.DateTime;
 import com.google.api.client.googleapis.json.GoogleJsonError;
 import com.google.api.client.googleapis.json.GoogleJsonResponseException;
+import com.google.api.client.googleapis.media.MediaHttpUploader;
 import com.google.api.services.youtube.YouTube;
 import com.google.api.services.youtube.model.Video;
 import com.google.api.services.youtube.model.VideoSnippet;
@@ -20,6 +21,7 @@ import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 public class VideoGeneratorUploader {
 
@@ -47,8 +49,8 @@ public class VideoGeneratorUploader {
 
         List<String> command = new ArrayList<>();
         command.add(resolveFfmpegBinary());
-        command.add("-stream_loop");
-        command.add("-1"); // loop image infinitely
+        command.add("-loop");
+        command.add("1"); // repeat single image as a continuous video source
         command.add("-i");
         command.add(imagePath);
         command.add("-stream_loop");
@@ -111,13 +113,22 @@ public class VideoGeneratorUploader {
             String title,
             String description,
             PublishOptions publishOptions) throws IOException {
+        return uploadToYouTube(videoPath, title, description, publishOptions, null);
+    }
+
+    public UploadResult uploadToYouTube(
+            String videoPath,
+            String title,
+            String description,
+            PublishOptions publishOptions,
+            Consumer<Double> uploadProgressListener) throws IOException {
         File videoFile = new File(videoPath);
         PublishOptions resolvedOptions = publishOptions == null
                 ? new PublishOptions(PrivacyStatus.PRIVATE, List.of(), null, null)
                 : publishOptions;
 
         try {
-            Video response = executeUpload(videoFile, title, description, resolvedOptions);
+            Video response = executeUpload(videoFile, title, description, resolvedOptions, uploadProgressListener);
             System.out.println("Uploaded video ID: " + response.getId());
             return new UploadResult(response.getId());
         } catch (GoogleJsonResponseException categoryError) {
@@ -131,7 +142,7 @@ public class VideoGeneratorUploader {
                     null,
                     resolvedOptions.publishAt());
 
-            Video fallbackResponse = executeUpload(videoFile, title, description, fallbackOptions);
+            Video fallbackResponse = executeUpload(videoFile, title, description, fallbackOptions, uploadProgressListener);
             System.out.println("Uploaded video ID without category: " + fallbackResponse.getId());
             return new UploadResult(
                     fallbackResponse.getId(),
@@ -143,7 +154,8 @@ public class VideoGeneratorUploader {
             File videoFile,
             String title,
             String description,
-            PublishOptions publishOptions) throws IOException {
+            PublishOptions publishOptions,
+            Consumer<Double> uploadProgressListener) throws IOException {
         Video videoObjectDefiningMetadata = new Video();
         VideoStatus status = new VideoStatus();
         status.setPrivacyStatus(publishOptions.privacyStatus().toApiValue());
@@ -166,6 +178,14 @@ public class VideoGeneratorUploader {
         FileContent mediaContent = new FileContent("video/mp4", videoFile);
         YouTube.Videos.Insert request = youtubeService.videos()
                 .insert(List.of("snippet", "status"), videoObjectDefiningMetadata, mediaContent);
+        MediaHttpUploader mediaHttpUploader = request.getMediaHttpUploader();
+        if (mediaHttpUploader != null) {
+            mediaHttpUploader.setDirectUploadEnabled(false);
+            mediaHttpUploader.setChunkSize(MediaHttpUploader.MINIMUM_CHUNK_SIZE * 8);
+            if (uploadProgressListener != null) {
+                mediaHttpUploader.setProgressListener(uploader -> uploadProgressListener.accept(uploader.getProgress()));
+            }
+        }
         return request.execute();
     }
 

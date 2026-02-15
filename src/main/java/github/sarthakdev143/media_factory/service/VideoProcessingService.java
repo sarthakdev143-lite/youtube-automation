@@ -20,4 +20,6 @@ public interface VideoProcessingService {
             MultipartFile thumbnail) throws IOException;
 
     Optional<VideoJobStatus> getJobStatus(String jobId);
+
+    Optional<VideoJobStatus> getActiveJobStatus();
 }

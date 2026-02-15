@@ -1,5 +1,4 @@
 package github.sarthakdev143.media_factory.service.impl;
-
 import github.sarthakdev143.media_factory.factory.VideoGeneratorUploaderFactory;
 import github.sarthakdev143.media_factory.integration.video.VideoGeneratorUploader;
 import github.sarthakdev143.media_factory.integration.youtube.YouTubeServiceProvider;
@@ -8,56 +7,122 @@ import github.sarthakdev143.media_factory.model.PublishOptions;
 import github.sarthakdev143.media_factory.model.UploadResult;
 import github.sarthakdev143.media_factory.model.VideoJobState;
 import github.sarthakdev143.media_factory.model.VideoJobStatus;
+import github.sarthakdev143.media_factory.persistence.VideoJob;
+import github.sarthakdev143.media_factory.persistence.VideoJobRepository;
+import github.sarthakdev143.media_factory.service.ActiveJobConflictException;
 import github.sarthakdev143.media_factory.service.VideoProcessingService;
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.MeterRegistry;
+import github.sarthakdev143.media_factory.service.ffmpeg.FfmpegService;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.core.task.TaskExecutor;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.net.URLDecoder;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 
 @Service
 public class DefaultVideoProcessingService implements VideoProcessingService {
 
     private static final Logger logger = LoggerFactory.getLogger(DefaultVideoProcessingService.class);
+    private static final int MAX_DURATION_SECONDS = 21_600;
+    private static final int DEFAULT_OUTPUT_FRAME_RATE = 2;
+    private static final int SHUTDOWN_GRACE_SECONDS = 5;
 
     private final YouTubeServiceProvider youTubeServiceProvider;
     private final VideoGeneratorUploaderFactory uploaderFactory;
-    private final TaskExecutor taskExecutor;
-    private final Map<String, VideoJobStatus> jobs = new ConcurrentHashMap<>();
-    private final Counter jobsWithSchedulingCounter;
-    private final Counter jobsWithThumbnailCounter;
-    private final Counter thumbnailFailureCounter;
-    private final Counter uploadFailureCounter;
-    private final Counter thumbnailUploadFailureCounter;
+    private final VideoJobRepository videoJobRepository;
+    private final FfmpegService ffmpegService;
+    private final ExecutorService videoWorkerExecutor;
+    private final TransactionTemplate transactionTemplate;
+    private final Path inputDirectory;
+    private final Path outputDirectory;
+    private final Path logDirectory;
+    private final long pollIntervalMs;
+    private final int outputFrameRate;
+    private final long progressPersistIntervalMs;
+    private final Duration shutdownAwait;
+    private final boolean workerEnabled;
+
+    private final ReentrantLock submissionLock = new ReentrantLock();
+    private final AtomicBoolean workerRunning = new AtomicBoolean(false);
+    private final AtomicReference<Process> activeFfmpegProcess = new AtomicReference<>();
+    private final AtomicReference<UUID> activeProcessingJobId = new AtomicReference<>();
+    private volatile Future<?> workerFuture;
 
     public DefaultVideoProcessingService(
             YouTubeServiceProvider youTubeServiceProvider,
             VideoGeneratorUploaderFactory uploaderFactory,
-            TaskExecutor taskExecutor,
-            MeterRegistry meterRegistry) {
+            VideoJobRepository videoJobRepository,
+            FfmpegService ffmpegService,
+            @Qualifier("videoWorkerExecutor") ExecutorService videoWorkerExecutor,
+            PlatformTransactionManager transactionManager,
+            @Value("${media-factory.work-dir:media-factory-work}") String workDir,
+            @Value("${media-factory.worker.poll-interval-ms:1000}") long pollIntervalMs,
+            @Value("${media-factory.worker.output-frame-rate:2}") int outputFrameRate,
+            @Value("${media-factory.worker.progress-persist-seconds:3}") long progressPersistSeconds,
+            @Value("${media-factory.worker.shutdown-await:PT10M}") Duration shutdownAwait,
+            @Value("${media-factory.worker.enabled:true}") boolean workerEnabled) throws IOException {
         this.youTubeServiceProvider = youTubeServiceProvider;
         this.uploaderFactory = uploaderFactory;
-        this.taskExecutor = taskExecutor;
-        this.jobsWithSchedulingCounter = meterRegistry.counter("media_factory.jobs.with_scheduling");
-        this.jobsWithThumbnailCounter = meterRegistry.counter("media_factory.jobs.with_thumbnail");
-        this.thumbnailFailureCounter = meterRegistry.counter("media_factory.thumbnail.failures");
-        this.uploadFailureCounter = meterRegistry.counter("media_factory.upload.failures", "phase", "video_upload");
-        this.thumbnailUploadFailureCounter = meterRegistry.counter(
-                "media_factory.upload.failures",
-                "phase",
-                "thumbnail_upload");
+        this.videoJobRepository = videoJobRepository;
+        this.ffmpegService = ffmpegService;
+        this.videoWorkerExecutor = videoWorkerExecutor;
+        this.pollIntervalMs = Math.max(250L, pollIntervalMs);
+        this.outputFrameRate = Math.max(1, outputFrameRate);
+        this.progressPersistIntervalMs = Math.max(1000L, progressPersistSeconds * 1000L);
+        this.shutdownAwait = shutdownAwait == null ? Duration.ofMinutes(10) : shutdownAwait;
+        this.workerEnabled = workerEnabled;
+
+        Path baseDirectory = Path.of(workDir).toAbsolutePath().normalize();
+        this.inputDirectory = baseDirectory.resolve("inputs");
+        this.outputDirectory = baseDirectory.resolve("outputs");
+        this.logDirectory = baseDirectory.resolve("logs");
+        Files.createDirectories(this.inputDirectory);
+        Files.createDirectories(this.outputDirectory);
+        Files.createDirectories(this.logDirectory);
+
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
+        this.transactionTemplate.setIsolationLevel(TransactionDefinition.ISOLATION_SERIALIZABLE);
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    public void startWorker() {
+        if (!workerEnabled) {
+            logger.info("Video worker is disabled by configuration.");
+            return;
+        }
+        if (workerRunning.compareAndSet(false, true)) {
+            workerFuture = videoWorkerExecutor.submit(this::workerLoop);
+            logger.info("Video processing worker started.");
+        }
     }
 
     @Override
@@ -69,150 +134,422 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
             String description,
             PublishOptions publishOptions,
             MultipartFile thumbnail) throws IOException {
-        String jobId = UUID.randomUUID().toString();
-        PublishOptions normalizedPublishOptions = normalizePublishOptions(publishOptions);
-        Path imagePath = null;
-        Path audioPath = null;
-        Path thumbnailPath = null;
 
+        if (durationSeconds < 1 || durationSeconds > MAX_DURATION_SECONDS) {
+            throw new IllegalArgumentException("Duration must be between 1 and " + MAX_DURATION_SECONDS + " seconds.");
+        }
+
+        PublishOptions normalizedOptions = normalizePublishOptions(publishOptions);
+        String sanitizedTitle = sanitizeText(title, 100);
+        String sanitizedDescription = sanitizeText(description, 5000);
+
+        submissionLock.lock();
         try {
-            imagePath = Files.createTempFile("media-factory-image-", ".jpg");
-            image.transferTo(imagePath);
-
-            audioPath = Files.createTempFile("media-factory-audio-", ".mp3");
-            audio.transferTo(audioPath);
-
-            if (thumbnail != null) {
-                String thumbnailType = thumbnail.getContentType();
-                thumbnailPath = Files.createTempFile("media-factory-thumbnail-", resolveThumbnailSuffix(thumbnailType));
-                thumbnail.transferTo(thumbnailPath);
+            Optional<VideoJob> activeProcessingJob = videoJobRepository.findFirstByStateOrderByCreatedAtAsc(VideoJobState.PROCESSING);
+            if (activeProcessingJob.isPresent()) {
+                throw new ActiveJobConflictException(toStatus(activeProcessingJob.get()));
             }
-        } catch (IOException e) {
-            deleteTempFile(imagePath);
-            deleteTempFile(audioPath);
-            deleteTempFile(thumbnailPath);
-            throw e;
+
+            UUID jobId = UUID.randomUUID();
+            Path imagePath = null;
+            Path audioPath = null;
+            Path thumbnailPath = null;
+            try {
+                imagePath = persistUpload(jobId, "image", image, defaultExtensionForImage(image));
+                audioPath = persistUpload(jobId, "audio", audio, defaultExtensionForAudio(audio));
+                if (thumbnail != null && !thumbnail.isEmpty()) {
+                    thumbnailPath = persistUpload(jobId, "thumbnail", thumbnail, defaultExtensionForThumbnail(thumbnail));
+                }
+            } catch (Exception ex) {
+                safeDelete(imagePath);
+                safeDelete(audioPath);
+                safeDelete(thumbnailPath);
+                throw ex;
+            }
+
+            String imagePathString = imagePath.toAbsolutePath().toString();
+            String audioPathString = audioPath.toAbsolutePath().toString();
+            String thumbnailPathString = thumbnailPath == null ? null : thumbnailPath.toAbsolutePath().toString();
+            String tagsJson = serializeTags(normalizedOptions.tags());
+
+            try {
+                transactionTemplate.executeWithoutResult(tx -> {
+                    Optional<VideoJob> activeJob = videoJobRepository.findFirstByStateOrderByCreatedAtAsc(VideoJobState.PROCESSING);
+                    if (activeJob.isPresent()) {
+                        throw new ActiveJobConflictException(toStatus(activeJob.get()));
+                    }
+
+                    VideoJob videoJob = new VideoJob();
+                    videoJob.setId(jobId);
+                    videoJob.setState(VideoJobState.QUEUED);
+                    videoJob.setTitle(sanitizedTitle);
+                    videoJob.setDescription(sanitizedDescription);
+                    videoJob.setPrivacyStatus(normalizedOptions.privacyStatus());
+                    videoJob.setTags(tagsJson);
+                    videoJob.setCategoryId(normalizedOptions.categoryId());
+                    videoJob.setPublishAt(normalizedOptions.publishAt());
+                    videoJob.setInputImagePath(imagePathString);
+                    videoJob.setInputAudioPath(audioPathString);
+                    videoJob.setInputThumbnailPath(thumbnailPathString);
+                    videoJob.setDurationSeconds(durationSeconds);
+                    videoJob.setProgressPercent(0);
+                    videoJob.setErrorMessage(null);
+                    videoJob.setWarningMessage(null);
+                    videoJobRepository.save(videoJob);
+                });
+            } catch (RuntimeException ex) {
+                safeDelete(imagePath);
+                safeDelete(audioPath);
+                safeDelete(thumbnailPath);
+                throw ex;
+            }
+
+            logger.info("[JOB_QUEUED id={} durationSeconds={}]", jobId, durationSeconds);
+            return jobId.toString();
+        } finally {
+            submissionLock.unlock();
         }
-
-        if (normalizedPublishOptions.isScheduled()) {
-            jobsWithSchedulingCounter.increment();
-        }
-        if (thumbnailPath != null) {
-            jobsWithThumbnailCounter.increment();
-        }
-
-        Instant now = Instant.now();
-        jobs.put(jobId, new VideoJobStatus(
-                jobId,
-                VideoJobState.QUEUED,
-                "Job queued.",
-                now,
-                now,
-                normalizedPublishOptions.privacyStatus(),
-                normalizedPublishOptions.tags(),
-                normalizedPublishOptions.categoryId(),
-                normalizedPublishOptions.publishAt(),
-                null,
-                null,
-                null));
-
-        logger.info(
-                "Accepted video job {} privacyStatus={} scheduled={} hasThumbnail={}",
-                jobId,
-                normalizedPublishOptions.privacyStatus(),
-                normalizedPublishOptions.isScheduled(),
-                thumbnailPath != null);
-
-        Path finalImagePath = imagePath;
-        Path finalAudioPath = audioPath;
-        Path finalThumbnailPath = thumbnailPath;
-        String finalThumbnailType = thumbnail != null ? thumbnail.getContentType() : null;
-        taskExecutor.execute(() -> processJob(
-                jobId,
-                finalImagePath,
-                finalAudioPath,
-                finalThumbnailPath,
-                finalThumbnailType,
-                durationSeconds,
-                title,
-                description,
-                normalizedPublishOptions));
-
-        return jobId;
     }
 
     @Override
     public Optional<VideoJobStatus> getJobStatus(String jobId) {
-        return Optional.ofNullable(jobs.get(jobId));
+        UUID uuid = parseJobId(jobId);
+        if (uuid == null) {
+            return Optional.empty();
+        }
+        return videoJobRepository.findById(uuid).map(this::toStatus);
     }
 
-    private void processJob(
-            String jobId,
-            Path imagePath,
-            Path audioPath,
-            Path thumbnailPath,
-            String thumbnailContentType,
-            int durationSeconds,
-            String title,
-            String description,
-            PublishOptions publishOptions) {
-        Path outputVideoPath = null;
-        updateJobState(jobId, VideoJobState.PROCESSING, "Generating video and uploading to YouTube.");
+    @Override
+    public Optional<VideoJobStatus> getActiveJobStatus() {
+        Optional<VideoJob> processing = videoJobRepository.findFirstByStateOrderByCreatedAtAsc(VideoJobState.PROCESSING);
+        if (processing.isPresent()) {
+            return processing.map(this::toStatus);
+        }
+        return videoJobRepository.findFirstByStateOrderByCreatedAtAsc(VideoJobState.QUEUED).map(this::toStatus);
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        workerRunning.set(false);
+
+        Process process = activeFfmpegProcess.get();
+        UUID processingJobId = activeProcessingJobId.get();
+        if (process != null && process.isAlive()) {
+            process.destroy();
+            try {
+                if (!process.waitFor(SHUTDOWN_GRACE_SECONDS, TimeUnit.SECONDS)) {
+                    process.destroyForcibly();
+                }
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+            }
+            if (processingJobId != null) {
+                markJobFailedIfProcessing(processingJobId, "Shutdown: job aborted");
+            }
+        }
+
+        Future<?> future = workerFuture;
+        if (future != null) {
+            try {
+                future.get(shutdownAwait.toSeconds(), TimeUnit.SECONDS);
+            } catch (Exception ex) {
+                logger.warn("Worker did not terminate cleanly within {}.", shutdownAwait, ex);
+            }
+        }
+    }
+
+    private void workerLoop() {
+        while (workerRunning.get() && !Thread.currentThread().isInterrupted()) {
+            try {
+                Optional<UUID> jobId = claimNextQueuedJobId();
+                if (jobId.isEmpty()) {
+                    Thread.sleep(pollIntervalMs);
+                    continue;
+                }
+                processClaimedJob(jobId.get());
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                return;
+            } catch (Exception ex) {
+                logger.error("Worker loop error", ex);
+                try {
+                    Thread.sleep(pollIntervalMs);
+                } catch (InterruptedException interruptedException) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+        }
+    }
+
+    private Optional<UUID> claimNextQueuedJobId() {
+        return transactionTemplate.execute(status -> {
+            if (videoJobRepository.existsByState(VideoJobState.PROCESSING)) {
+                return Optional.<UUID>empty();
+            }
+            Optional<VideoJob> queued = videoJobRepository.findFirstByStateOrderByCreatedAtAsc(VideoJobState.QUEUED);
+            if (queued.isEmpty()) {
+                return Optional.<UUID>empty();
+            }
+            VideoJob videoJob = queued.get();
+            videoJob.setState(VideoJobState.PROCESSING);
+            videoJob.setErrorMessage(null);
+            videoJob.setProgressPercent(0);
+            videoJobRepository.save(videoJob);
+            return Optional.of(videoJob.getId());
+        });
+    }
+
+    private void processClaimedJob(UUID jobId) {
+        VideoJob job = videoJobRepository.findById(jobId).orElse(null);
+        if (job == null) {
+            return;
+        }
+
+        activeProcessingJobId.set(jobId);
+        AtomicInteger lastPersistedPercent = new AtomicInteger(-1);
+        AtomicLong lastPersistedAtMs = new AtomicLong(0L);
+
+        Path outputPath = outputDirectory.resolve(jobId + ".mp4").toAbsolutePath().normalize();
+        Path logPath = logDirectory.resolve(jobId + ".ffmpeg.log").toAbsolutePath().normalize();
+        updateOutputPath(jobId, outputPath);
+
+        logger.info("[JOB_STARTED id={} durationSeconds={}]", jobId, job.getDurationSeconds());
 
         try {
-            outputVideoPath = Files.createTempFile("media-factory-output-", ".mp4");
+            ffmpegService.runEncoding(
+                    Path.of(job.getInputImagePath()),
+                    Path.of(job.getInputAudioPath()),
+                    outputPath,
+                    job.getDurationSeconds(),
+                    outputFrameRate > 0 ? outputFrameRate : DEFAULT_OUTPUT_FRAME_RATE,
+                    progressPercent -> persistProgressIfNeeded(
+                            jobId,
+                            progressPercent,
+                            lastPersistedPercent,
+                            lastPersistedAtMs),
+                    process -> activeFfmpegProcess.set(process),
+                    logPath);
+
+            persistProgress(jobId, 100);
+
             VideoGeneratorUploader uploader = uploaderFactory.create(youTubeServiceProvider.getService());
+            UploadResult uploadResult = uploader.uploadToYouTube(
+                    outputPath.toString(),
+                    job.getTitle(),
+                    job.getDescription(),
+                    new PublishOptions(job.getPrivacyStatus(), deserializeTags(job.getTags()), job.getCategoryId(), job.getPublishAt()),
+                    progress -> {
+                        int uploadPercent = (int) Math.round(progress * 100.0d);
+                        logger.info("[UPLOAD id={} percent={}]", jobId, uploadPercent);
+                    });
 
-            uploader.generateVideo(
-                    imagePath.toString(),
-                    audioPath.toString(),
-                    durationSeconds,
-                    outputVideoPath.toString());
-            UploadResult uploadResult;
-            try {
-                uploadResult = uploader.uploadToYouTube(
-                        outputVideoPath.toString(),
-                        title,
-                        description,
-                        publishOptions);
-            } catch (Exception uploadError) {
-                uploadFailureCounter.increment();
-                throw uploadError;
-            }
-
-            String videoId = uploadResult.videoId();
-            String videoUrl = buildVideoUrl(videoId);
             String warningMessage = uploadResult.warningMessage();
-
-            if (thumbnailPath != null) {
+            if (job.getInputThumbnailPath() != null) {
                 try {
-                    uploader.uploadThumbnail(videoId, thumbnailPath.toString(), thumbnailContentType);
-                } catch (Exception thumbnailError) {
-                    thumbnailFailureCounter.increment();
-                    thumbnailUploadFailureCounter.increment();
-                    warningMessage = combineWarnings(
+                    uploader.uploadThumbnail(
+                            uploadResult.videoId(),
+                            job.getInputThumbnailPath(),
+                            guessContentType(job.getInputThumbnailPath()));
+                } catch (Exception thumbnailEx) {
+                    warningMessage = appendWarning(
                             warningMessage,
                             "Video uploaded, but thumbnail upload failed.");
-                    logger.error("Thumbnail upload failed for job {} and video {}", jobId, videoId, thumbnailError);
+                    logger.warn("Thumbnail upload failed for job {}", jobId, thumbnailEx);
                 }
             }
 
-            markJobCompleted(jobId, videoId, videoUrl, warningMessage);
-            logger.info(
-                    "Completed video job {} privacyStatus={} scheduled={} youtubeVideoId={} warning={}",
-                    jobId,
-                    publishOptions.privacyStatus(),
-                    publishOptions.isScheduled(),
-                    videoId,
-                    warningMessage != null);
-        } catch (Exception e) {
-            logger.error("Video processing job {} failed", jobId, e);
-            markJobFailed(jobId, "Video processing failed. Check server logs.");
+            markJobCompleted(jobId, uploadResult.videoId(), warningMessage);
+            cleanupOnSuccess(job, outputPath);
+        } catch (Exception ex) {
+            logger.error("[JOB_FAILED id={} reason={}]", jobId, ex.getMessage(), ex);
+            markJobFailed(jobId, safeFailureMessage(ex));
+            markFailureInputs(job);
         } finally {
-            deleteTempFile(imagePath);
-            deleteTempFile(audioPath);
-            deleteTempFile(thumbnailPath);
-            deleteTempFile(outputVideoPath);
+            activeFfmpegProcess.set(null);
+            activeProcessingJobId.set(null);
+        }
+    }
+
+    private void persistProgressIfNeeded(
+            UUID jobId,
+            int newProgressPercent,
+            AtomicInteger lastPersistedPercent,
+            AtomicLong lastPersistedAtMs) {
+        int boundedProgress = Math.max(0, Math.min(100, newProgressPercent));
+        long now = System.currentTimeMillis();
+        int previousPercent = lastPersistedPercent.get();
+        long previousPersistTime = lastPersistedAtMs.get();
+
+        boolean shouldPersist = previousPercent < 0
+                || boundedProgress == 100
+                || Math.abs(boundedProgress - previousPercent) > 1
+                || now - previousPersistTime >= progressPersistIntervalMs;
+
+        if (!shouldPersist) {
+            return;
+        }
+
+        if (lastPersistedPercent.compareAndSet(previousPercent, boundedProgress)) {
+            lastPersistedAtMs.set(now);
+            persistProgress(jobId, boundedProgress);
+            logger.info("[ENCODING id={} progress={}]", jobId, boundedProgress);
+        }
+    }
+
+    private void persistProgress(UUID jobId, int progressPercent) {
+        transactionTemplate.executeWithoutResult(tx -> {
+            VideoJob job = videoJobRepository.findById(jobId).orElse(null);
+            if (job == null) {
+                return;
+            }
+            if (job.getState() != VideoJobState.PROCESSING) {
+                return;
+            }
+            job.setProgressPercent(Math.max(0, Math.min(100, progressPercent)));
+            videoJobRepository.save(job);
+        });
+    }
+
+    private void markJobCompleted(UUID jobId, String youtubeVideoId, String warningMessage) {
+        transactionTemplate.executeWithoutResult(tx -> {
+            VideoJob job = videoJobRepository.findById(jobId).orElse(null);
+            if (job == null) {
+                return;
+            }
+            job.setState(VideoJobState.COMPLETED);
+            job.setYoutubeVideoId(youtubeVideoId);
+            job.setProgressPercent(100);
+            job.setWarningMessage(warningMessage);
+            job.setErrorMessage(null);
+            videoJobRepository.save(job);
+        });
+    }
+
+    private void markJobFailed(UUID jobId, String errorMessage) {
+        transactionTemplate.executeWithoutResult(tx -> {
+            VideoJob job = videoJobRepository.findById(jobId).orElse(null);
+            if (job == null) {
+                return;
+            }
+            job.setState(VideoJobState.FAILED);
+            job.setErrorMessage(errorMessage);
+            videoJobRepository.save(job);
+        });
+    }
+
+    private void markJobFailedIfProcessing(UUID jobId, String errorMessage) {
+        transactionTemplate.executeWithoutResult(tx -> {
+            VideoJob job = videoJobRepository.findById(jobId).orElse(null);
+            if (job == null || job.getState() != VideoJobState.PROCESSING) {
+                return;
+            }
+            job.setState(VideoJobState.FAILED);
+            job.setErrorMessage(errorMessage);
+            videoJobRepository.save(job);
+        });
+    }
+
+    private void updateOutputPath(UUID jobId, Path outputPath) {
+        transactionTemplate.executeWithoutResult(tx -> {
+            VideoJob job = videoJobRepository.findById(jobId).orElse(null);
+            if (job == null) {
+                return;
+            }
+            job.setOutputPath(outputPath.toString());
+            videoJobRepository.save(job);
+        });
+    }
+
+    private Path persistUpload(UUID jobId, String label, MultipartFile source, String fallbackExtension) throws IOException {
+        if (source == null || source.isEmpty()) {
+            throw new IllegalArgumentException(label + " upload is required");
+        }
+
+        String safeBaseName = safeFilenameBase(source.getOriginalFilename(), label);
+        String extension = sanitizeExtension(extensionFromName(source.getOriginalFilename()), fallbackExtension);
+        String fileName = jobId + "-" + label + "-" + safeBaseName + extension;
+        Path targetPath = inputDirectory.resolve(fileName).normalize();
+
+        if (!targetPath.startsWith(inputDirectory)) {
+            throw new IOException("Path traversal attempt blocked for " + label);
+        }
+
+        try (InputStream inputStream = source.getInputStream()) {
+            Files.copy(inputStream, targetPath, StandardCopyOption.REPLACE_EXISTING);
+        }
+        return targetPath;
+    }
+
+    private void cleanupOnSuccess(VideoJob job, Path outputPath) {
+        safeDelete(Path.of(job.getInputImagePath()));
+        safeDelete(Path.of(job.getInputAudioPath()));
+        if (job.getInputThumbnailPath() != null) {
+            safeDelete(Path.of(job.getInputThumbnailPath()));
+        }
+        safeDelete(outputPath);
+    }
+
+    private void markFailureInputs(VideoJob job) {
+        renameToFailedPrefix(job.getId(), safePath(job.getInputImagePath()));
+        renameToFailedPrefix(job.getId(), safePath(job.getInputAudioPath()));
+        renameToFailedPrefix(job.getId(), safePath(job.getInputThumbnailPath()));
+    }
+
+    private void renameToFailedPrefix(UUID jobId, Path sourcePath) {
+        if (sourcePath == null || !Files.exists(sourcePath)) {
+            return;
+        }
+
+        String fileName = sourcePath.getFileName().toString();
+        if (fileName.startsWith("failed-" + jobId + "-")) {
+            return;
+        }
+
+        Path target = sourcePath.resolveSibling("failed-" + jobId + "-" + fileName);
+        try {
+            Files.move(sourcePath, target, StandardCopyOption.REPLACE_EXISTING);
+        } catch (Exception ex) {
+            logger.warn("Could not mark failed input file {} for job {}", sourcePath, jobId, ex);
+        }
+    }
+
+    private VideoJobStatus toStatus(VideoJob videoJob) {
+        return new VideoJobStatus(
+                videoJob.getId().toString(),
+                videoJob.getState(),
+                statusMessage(videoJob),
+                videoJob.getCreatedAt(),
+                videoJob.getUpdatedAt(),
+                videoJob.getProgressPercent(),
+                videoJob.getPrivacyStatus(),
+                deserializeTags(videoJob.getTags()),
+                videoJob.getCategoryId(),
+                videoJob.getPublishAt(),
+                videoJob.getYoutubeVideoId(),
+                buildVideoUrl(videoJob.getYoutubeVideoId()),
+                videoJob.getWarningMessage());
+    }
+
+    private String statusMessage(VideoJob job) {
+        return switch (job.getState()) {
+            case QUEUED -> "Job queued.";
+            case PROCESSING -> "Generating video and uploading to YouTube. " + job.getProgressPercent() + "%";
+            case COMPLETED -> job.getWarningMessage() == null
+                    ? "Video generated and uploaded successfully."
+                    : "Video generated and uploaded with warnings.";
+            case FAILED -> job.getErrorMessage() == null
+                    ? "Video processing failed. Check server logs."
+                    : job.getErrorMessage();
+        };
+    }
+
+    private UUID parseJobId(String jobId) {
+        try {
+            return UUID.fromString(jobId);
+        } catch (Exception ex) {
+            return null;
         }
     }
 
@@ -220,7 +557,6 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
         if (publishOptions == null) {
             return new PublishOptions(PrivacyStatus.PRIVATE, List.of(), null, null);
         }
-
         return new PublishOptions(
                 publishOptions.privacyStatus(),
                 publishOptions.tags(),
@@ -228,90 +564,166 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
                 publishOptions.publishAt());
     }
 
-    private void updateJobState(String jobId, VideoJobState state, String message) {
-        jobs.computeIfPresent(jobId, (ignored, current) -> new VideoJobStatus(
-                current.jobId(),
-                state,
-                message,
-                current.createdAt(),
-                Instant.now(),
-                current.privacyStatus(),
-                current.tags(),
-                current.categoryId(),
-                current.publishAt(),
-                current.youtubeVideoId(),
-                current.youtubeVideoUrl(),
-                current.warningMessage()));
+    private String serializeTags(List<String> tags) {
+        List<String> normalized = tags == null ? List.of() : tags;
+        return normalized.stream()
+                .map(tag -> URLEncoder.encode(tag, StandardCharsets.UTF_8))
+                .reduce((left, right) -> left + "," + right)
+                .orElse("");
     }
 
-    private void markJobCompleted(String jobId, String videoId, String videoUrl, String warningMessage) {
-        String completionMessage = warningMessage == null
-                ? "Video generated and uploaded successfully."
-                : "Video generated and uploaded with warnings.";
-
-        jobs.computeIfPresent(jobId, (ignored, current) -> new VideoJobStatus(
-                current.jobId(),
-                VideoJobState.COMPLETED,
-                completionMessage,
-                current.createdAt(),
-                Instant.now(),
-                current.privacyStatus(),
-                current.tags(),
-                current.categoryId(),
-                current.publishAt(),
-                videoId,
-                videoUrl,
-                warningMessage));
+    private List<String> deserializeTags(String tagsJson) {
+        if (tagsJson == null || tagsJson.isBlank()) {
+            return List.of();
+        }
+        return List.of(tagsJson.split(","))
+                .stream()
+                .map(String::trim)
+                .filter(tag -> !tag.isEmpty())
+                .map(tag -> URLDecoder.decode(tag, StandardCharsets.UTF_8))
+                .toList();
     }
 
-    private void markJobFailed(String jobId, String message) {
-        jobs.computeIfPresent(jobId, (ignored, current) -> new VideoJobStatus(
-                current.jobId(),
-                VideoJobState.FAILED,
-                message,
-                current.createdAt(),
-                Instant.now(),
-                current.privacyStatus(),
-                current.tags(),
-                current.categoryId(),
-                current.publishAt(),
-                current.youtubeVideoId(),
-                current.youtubeVideoUrl(),
-                current.warningMessage()));
-    }
-
-    private String resolveThumbnailSuffix(String contentType) {
+    private String defaultExtensionForImage(MultipartFile image) {
+        String contentType = image.getContentType();
         if (contentType != null && contentType.toLowerCase().contains("png")) {
             return ".png";
         }
         return ".jpg";
     }
 
-    private String buildVideoUrl(String videoId) {
-        if (videoId == null || videoId.isBlank()) {
+    private String defaultExtensionForAudio(MultipartFile audio) {
+        String contentType = audio.getContentType();
+        if (contentType != null && contentType.toLowerCase().contains("wav")) {
+            return ".wav";
+        }
+        if (contentType != null && contentType.toLowerCase().contains("aac")) {
+            return ".aac";
+        }
+        return ".mp3";
+    }
+
+    private String defaultExtensionForThumbnail(MultipartFile thumbnail) {
+        String contentType = thumbnail.getContentType();
+        if (contentType != null && contentType.toLowerCase().contains("png")) {
+            return ".png";
+        }
+        return ".jpg";
+    }
+
+    private String extensionFromName(String originalFilename) {
+        if (originalFilename == null || originalFilename.isBlank()) {
+            return "";
+        }
+        String fileName = Path.of(originalFilename).getFileName().toString();
+        int dotIndex = fileName.lastIndexOf('.');
+        if (dotIndex < 0) {
+            return "";
+        }
+        return fileName.substring(dotIndex);
+    }
+
+    private String sanitizeExtension(String extension, String fallback) {
+        String candidate = extension == null || extension.isBlank() ? fallback : extension;
+        String normalized = candidate.replaceAll("[^a-zA-Z0-9.]", "");
+        if (!normalized.startsWith(".")) {
+            normalized = "." + normalized;
+        }
+        if (normalized.length() > 8) {
+            return fallback;
+        }
+        return normalized;
+    }
+
+    private String safeFilenameBase(String originalFilename, String fallback) {
+        String candidate = fallback;
+        if (originalFilename != null && !originalFilename.isBlank()) {
+            try {
+                candidate = Path.of(originalFilename).getFileName().toString();
+            } catch (InvalidPathException ignored) {
+                candidate = fallback;
+            }
+        }
+
+        int dotIndex = candidate.lastIndexOf('.');
+        if (dotIndex > 0) {
+            candidate = candidate.substring(0, dotIndex);
+        }
+        String sanitized = candidate.replaceAll("[^a-zA-Z0-9_-]", "_");
+        return sanitized.isBlank() ? fallback : sanitized;
+    }
+
+    private String sanitizeText(String source, int maxLength) {
+        if (source == null) {
+            return "";
+        }
+        String normalized = source
+                .replace("\u0000", "")
+                .replaceAll("[\\p{Cntrl}&&[^\\r\\n\\t]]", "")
+                .trim();
+        if (normalized.length() <= maxLength) {
+            return normalized;
+        }
+        return normalized.substring(0, maxLength);
+    }
+
+    private String buildVideoUrl(String youtubeVideoId) {
+        if (youtubeVideoId == null || youtubeVideoId.isBlank()) {
             return null;
         }
-        return "https://www.youtube.com/watch?v=" + videoId;
+        return "https://www.youtube.com/watch?v=" + youtubeVideoId;
     }
 
-    private String combineWarnings(String existingWarning, String newWarning) {
-        if (existingWarning == null || existingWarning.isBlank()) {
-            return newWarning;
+    private String appendWarning(String existing, String additional) {
+        if (existing == null || existing.isBlank()) {
+            return additional;
         }
-        if (newWarning == null || newWarning.isBlank()) {
-            return existingWarning;
+        if (additional == null || additional.isBlank()) {
+            return existing;
         }
-        return existingWarning + " " + newWarning;
+        return existing + " " + additional;
     }
 
-    private void deleteTempFile(Path filePath) {
-        if (filePath == null) {
+    private Path safePath(String rawPath) {
+        if (rawPath == null || rawPath.isBlank()) {
+            return null;
+        }
+        try {
+            return Path.of(rawPath).toAbsolutePath().normalize();
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private String guessContentType(String path) {
+        try {
+            String type = Files.probeContentType(Path.of(path));
+            return type == null ? "image/jpeg" : type;
+        } catch (IOException ex) {
+            return "image/jpeg";
+        }
+    }
+
+    private String safeFailureMessage(Exception exception) {
+        String raw = exception.getMessage();
+        if (raw == null || raw.isBlank()) {
+            return "Video processing failed. Check server logs.";
+        }
+        String sanitized = raw.replaceAll("[\\r\\n]+", " ").trim();
+        if (sanitized.length() > 1000) {
+            return sanitized.substring(0, 1000);
+        }
+        return sanitized;
+    }
+
+    private void safeDelete(Path path) {
+        if (path == null) {
             return;
         }
         try {
-            Files.deleteIfExists(filePath);
-        } catch (Exception ignored) {
-            // Cleanup failures are non-fatal.
+            Files.deleteIfExists(path);
+        } catch (Exception ex) {
+            logger.warn("Failed to delete file {}", path, ex);
         }
     }
 }

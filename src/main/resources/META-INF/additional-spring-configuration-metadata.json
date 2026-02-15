@@ -1,0 +1,37 @@
+{"properties": [
+  {
+    "name": "media-factory.preflight.enabled",
+    "type": "java.lang.String",
+    "description": "A description for 'media-factory.preflight.enabled'"
+  },
+  {
+    "name": "media-factory.work-dir",
+    "type": "java.lang.String",
+    "description": "A description for 'media-factory.work-dir'"
+  },
+  {
+    "name": "media-factory.worker.enabled",
+    "type": "java.lang.String",
+    "description": "A description for 'media-factory.worker.enabled'"
+  },
+  {
+    "name": "media-factory.worker.poll-interval-ms",
+    "type": "java.lang.String",
+    "description": "A description for 'media-factory.worker.poll-interval-ms'"
+  },
+  {
+    "name": "media-factory.worker.output-frame-rate",
+    "type": "java.lang.String",
+    "description": "A description for 'media-factory.worker.output-frame-rate'"
+  },
+  {
+    "name": "media-factory.worker.progress-persist-seconds",
+    "type": "java.lang.String",
+    "description": "A description for 'media-factory.worker.progress-persist-seconds'"
+  },
+  {
+    "name": "media-factory.worker.shutdown-await",
+    "type": "java.lang.String",
+    "description": "A description for 'media-factory.worker.shutdown-await'"
+  }
+]}

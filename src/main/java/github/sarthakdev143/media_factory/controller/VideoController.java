@@ -4,6 +4,7 @@ import github.sarthakdev143.media_factory.dto.VideoJobSubmissionResponse;
 import github.sarthakdev143.media_factory.model.PrivacyStatus;
 import github.sarthakdev143.media_factory.model.PublishOptions;
 import github.sarthakdev143.media_factory.model.VideoJobState;
+import github.sarthakdev143.media_factory.service.ActiveJobConflictException;
 import github.sarthakdev143.media_factory.service.VideoProcessingService;
 
 import org.slf4j.Logger;
@@ -33,7 +34,7 @@ public class VideoController {
 
     private static final Logger logger = LoggerFactory.getLogger(VideoController.class);
     private static final int MIN_DURATION_SECONDS = 1;
-    private static final int MAX_DURATION_SECONDS = 10 * 60 * 60;
+    private static final int MAX_DURATION_SECONDS = 21_600;
     private static final int MAX_TITLE_LENGTH = 100;
     private static final int MAX_DESCRIPTION_LENGTH = 5000;
     private static final int MAX_TAGS = 20;
@@ -60,7 +61,62 @@ public class VideoController {
             @RequestParam(value = "categoryId", required = false) String categoryIdInput,
             @RequestParam(value = "publishAt", required = false) String publishAtInput,
             @RequestParam(value = "thumbnail", required = false) MultipartFile thumbnail) {
+        return submitVideoJob(
+                image,
+                audio,
+                durationSeconds,
+                title,
+                description,
+                privacyStatusInput,
+                tagsInput,
+                categoryIdInput,
+                publishAtInput,
+                thumbnail);
+    }
 
+    @PostMapping(value = "/compositions", consumes = "multipart/form-data")
+    public ResponseEntity<?> createComposition(
+            @RequestParam("image") MultipartFile image,
+            @RequestParam("audio") MultipartFile audio,
+            @RequestParam("duration") int durationSeconds,
+            @RequestParam("title") String title,
+            @RequestParam("description") String description,
+            @RequestParam(value = "privacyStatus", required = false) String privacyStatusInput,
+            @RequestParam(value = "tags", required = false) List<String> tagsInput,
+            @RequestParam(value = "categoryId", required = false) String categoryIdInput,
+            @RequestParam(value = "publishAt", required = false) String publishAtInput,
+            @RequestParam(value = "thumbnail", required = false) MultipartFile thumbnail) {
+        return submitVideoJob(
+                image,
+                audio,
+                durationSeconds,
+                title,
+                description,
+                privacyStatusInput,
+                tagsInput,
+                categoryIdInput,
+                publishAtInput,
+                thumbnail);
+    }
+
+    @GetMapping("/status/active")
+    public ResponseEntity<?> getActiveStatus() {
+        return videoProcessingService.getActiveJobStatus()
+                .<ResponseEntity<?>>map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).body("No active jobs."));
+    }
+
+    private ResponseEntity<?> submitVideoJob(
+            MultipartFile image,
+            MultipartFile audio,
+            int durationSeconds,
+            String title,
+            String description,
+            String privacyStatusInput,
+            List<String> tagsInput,
+            String categoryIdInput,
+            String publishAtInput,
+            MultipartFile thumbnail) {
         try {
             validateBaseRequest(image, audio, durationSeconds, title, description);
             PublishOptions publishOptions = validateAndBuildPublishOptions(
@@ -83,6 +139,8 @@ public class VideoController {
                             jobId,
                             VideoJobState.QUEUED,
                             "Video job accepted. Poll /api/video/status/{jobId} for progress."));
+        } catch (ActiveJobConflictException conflict) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(conflict.getActiveJob());
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body("Invalid request: " + e.getMessage());
         } catch (Exception e) {

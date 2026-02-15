@@ -1,3 +1,5 @@
+media-factory-work/
+media-factory.db
 secrets/
 .youtube-tokens/
 .env
