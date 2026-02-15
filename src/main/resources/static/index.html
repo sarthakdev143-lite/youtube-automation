@@ -301,7 +301,7 @@
         }
 
         if (job.updatedAt) {
-            lines.push(`Last Updated: ${escapeHtml(job.updatedAt)}`);
+            lines.push(`Last Updated: ${escapeHtml(formatTimestamp(job.updatedAt))}`);
         }
 
         if (job.youtubeVideoUrl) {
@@ -468,6 +468,18 @@
             .replace(/>/g, "&gt;")
             .replace(/"/g, "&quot;")
             .replace(/'/g, "&#39;");
+    }
+
+    function formatTimestamp(isoInstant) {
+        const parsed = new Date(isoInstant);
+        if (Number.isNaN(parsed.getTime())) {
+            return isoInstant;
+        }
+
+        return parsed.toLocaleString(undefined, {
+            dateStyle: "medium",
+            timeStyle: "medium"
+        });
     }
 
     function pollJobStatus(jobId) {
