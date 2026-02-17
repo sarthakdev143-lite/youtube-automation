@@ -59,6 +59,17 @@ class VideoControllerTest {
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.jobId").value("job-123"))
                 .andExpect(jsonPath("$.state").value("QUEUED"));
+
+        ArgumentCaptor<PublishOptions> publishOptionsCaptor = ArgumentCaptor.forClass(PublishOptions.class);
+        verify(videoProcessingService).submitJob(
+                any(),
+                any(),
+                eq(60),
+                eq("My title"),
+                eq("My description"),
+                publishOptionsCaptor.capture(),
+                any());
+        assertThat(publishOptionsCaptor.getValue().categoryId()).isEqualTo("10");
     }
 
     @Test

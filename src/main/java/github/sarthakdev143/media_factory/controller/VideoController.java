@@ -41,6 +41,7 @@ public class VideoController {
     private static final int MAX_TAG_LENGTH = 50;
     private static final int MIN_PUBLISH_DELAY_SECONDS = 5 * 60;
     private static final long MAX_THUMBNAIL_BYTES = 2L * 1024 * 1024;
+    private static final String DEFAULT_YOUTUBE_CATEGORY_ID = "10";
     private static final Set<String> ALLOWED_THUMBNAIL_TYPES = Set.of("image/jpeg", "image/png");
     private static final Pattern CATEGORY_ID_PATTERN = Pattern.compile("^\\d{1,3}$");
 
@@ -252,7 +253,7 @@ public class VideoController {
 
     private String normalizeCategoryId(String categoryIdInput) {
         if (categoryIdInput == null || categoryIdInput.isBlank()) {
-            return null;
+            return DEFAULT_YOUTUBE_CATEGORY_ID;
         }
 
         String normalizedCategoryId = categoryIdInput.trim();

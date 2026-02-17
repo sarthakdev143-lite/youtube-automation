@@ -59,6 +59,7 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
     private static final int ENCODING_WEIGHT_PERCENT = 80;
     private static final int UPLOAD_WEIGHT_PERCENT = 19;
     private static final int THUMBNAIL_WEIGHT_PERCENT = 1;
+    private static final String DEFAULT_YOUTUBE_CATEGORY_ID = "10";
 
     private final YouTubeServiceProvider youTubeServiceProvider;
     private final VideoGeneratorUploaderFactory uploaderFactory;
@@ -735,12 +736,12 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
 
     private PublishOptions normalizePublishOptions(PublishOptions publishOptions) {
         if (publishOptions == null) {
-            return new PublishOptions(PrivacyStatus.PRIVATE, List.of(), null, null);
+            return new PublishOptions(PrivacyStatus.PRIVATE, List.of(), DEFAULT_YOUTUBE_CATEGORY_ID, null);
         }
         return new PublishOptions(
                 publishOptions.privacyStatus(),
                 publishOptions.tags(),
-                publishOptions.categoryId(),
+                publishOptions.categoryId() == null ? DEFAULT_YOUTUBE_CATEGORY_ID : publishOptions.categoryId(),
                 publishOptions.publishAt());
     }
 

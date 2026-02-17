@@ -59,7 +59,7 @@ Required fields:
 Optional publishing fields:
 - `privacyStatus`: `PRIVATE | UNLISTED | PUBLIC` (case-insensitive, default `PRIVATE`)
 - `tags`: repeated field (`-F "tags=tag1" -F "tags=tag2"`), max 20 unique tags, each max 50 chars
-- `categoryId`: numeric string matching `^\d{1,3}$`
+- `categoryId`: numeric string matching `^\d{1,3}$` (defaults to `10` for Music if omitted)
 - `publishAt`: ISO-8601 UTC instant ending with `Z` (example `2026-02-20T18:30:00Z`), must be at least 5 minutes in future
 - `thumbnail`: optional image file (`image/jpeg` or `image/png`)
 
