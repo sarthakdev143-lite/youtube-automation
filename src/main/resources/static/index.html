@@ -102,6 +102,56 @@
             margin-top: 6px;
         }
 
+        .preset-controls {
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 12px;
+            background: #141414;
+        }
+
+        .preset-grid {
+            display: grid;
+            gap: 10px;
+            grid-template-columns: 1fr;
+        }
+
+        @media (min-width: 720px) {
+            .preset-grid {
+                grid-template-columns: 2fr 1fr 1fr;
+            }
+
+            .preset-grid .full-row {
+                grid-column: 1 / -1;
+            }
+        }
+
+        .button-secondary {
+            background: #2f2f2f;
+        }
+
+        .button-secondary:hover {
+            background: #3b3b3b;
+        }
+
+        .history-controls {
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 12px;
+            background: #141414;
+        }
+
+        .history-grid {
+            display: grid;
+            gap: 10px;
+            grid-template-columns: 1fr;
+        }
+
+        @media (min-width: 720px) {
+            .history-grid {
+                grid-template-columns: 2fr 1fr 1fr 1fr;
+            }
+        }
+
         #status {
             margin-top: 16px;
             line-height: 1.45;
@@ -121,6 +171,34 @@
 
     <form id="videoForm">
         <div class="grid">
+            <div class="full preset-controls">
+                <label for="presetSelect">Presets</label>
+                <div class="preset-grid">
+                    <select id="presetSelect">
+                        <option value="">Select a preset</option>
+                    </select>
+                    <button type="button" id="applyPresetBtn" class="button-secondary" disabled>Apply Preset</button>
+                    <button type="button" id="deletePresetBtn" class="button-secondary" disabled>Delete Preset</button>
+
+                    <input type="text" id="presetName" class="full-row" maxlength="50" placeholder="Preset name (for save)">
+                    <button type="button" id="savePresetBtn" class="button-secondary full-row">Save Current Fields as Preset</button>
+                </div>
+                <div class="hint">Presets include text and publish settings. File inputs are not saved.</div>
+            </div>
+
+            <div class="full history-controls">
+                <label for="historySelect">Form History</label>
+                <div class="history-grid">
+                    <select id="historySelect">
+                        <option value="">Select a history entry</option>
+                    </select>
+                    <button type="button" id="applyHistoryBtn" class="button-secondary" disabled>Load Entry</button>
+                    <button type="button" id="deleteHistoryBtn" class="button-secondary" disabled>Delete Entry</button>
+                    <button type="button" id="clearHistoryBtn" class="button-secondary">Clear History</button>
+                </div>
+                <div class="hint">History is saved automatically after each accepted Generate request. File inputs are not saved.</div>
+            </div>
+
             <div>
                 <label for="image">Image</label>
                 <input type="file" id="image" accept="image/*" required>
@@ -190,10 +268,27 @@
     const status = document.getElementById("status");
     const ACTIVE_JOB_STORAGE_KEY = "mediaFactory.activeJobId";
     const FORM_STATE_STORAGE_KEY = "mediaFactory.formState";
+    const PRESETS_STORAGE_KEY = "mediaFactory.formPresets";
+    const FORM_HISTORY_STORAGE_KEY = "mediaFactory.formHistory";
     const FORM_PERSIST_IDS = ["duration", "title", "description", "privacyStatus", "tags", "categoryId", "publishAt"];
+    const PRESET_MAX_NAME_LENGTH = 50;
+    const FORM_HISTORY_LIMIT = 20;
+    const presetSelect = document.getElementById("presetSelect");
+    const presetNameInput = document.getElementById("presetName");
+    const applyPresetBtn = document.getElementById("applyPresetBtn");
+    const deletePresetBtn = document.getElementById("deletePresetBtn");
+    const savePresetBtn = document.getElementById("savePresetBtn");
+    const historySelect = document.getElementById("historySelect");
+    const applyHistoryBtn = document.getElementById("applyHistoryBtn");
+    const deleteHistoryBtn = document.getElementById("deleteHistoryBtn");
+    const clearHistoryBtn = document.getElementById("clearHistoryBtn");
+    let formPresets = loadFormPresets();
+    let formHistory = loadFormHistory();
     let activePoll = null;
 
     restoreFormState();
+    initializePresets();
+    initializeHistory();
     attachFormPersistence();
     restoreJobTracking();
 
@@ -267,6 +362,7 @@
             const submission = await response.json();
             saveActiveJobId(submission.jobId);
             persistFormState();
+            saveHistoryEntry(submission.jobId);
             status.innerText = `Job ${submission.jobId}: ${submission.state}. ${submission.message}`;
             pollJobStatus(submission.jobId);
         } catch (err) {
@@ -397,16 +493,337 @@
         }
     }
 
-    function persistFormState() {
+    function initializePresets() {
+        renderPresetOptions();
+
+        if (!presetSelect || !presetNameInput || !applyPresetBtn || !deletePresetBtn || !savePresetBtn) {
+            return;
+        }
+
+        presetSelect.addEventListener("change", () => {
+            if (presetSelect.value) {
+                presetNameInput.value = presetSelect.value;
+            }
+            updatePresetButtons();
+        });
+
+        presetNameInput.addEventListener("input", updatePresetButtons);
+
+        savePresetBtn.addEventListener("click", () => {
+            const presetName = normalizePresetName(presetNameInput.value);
+            if (!presetName) {
+                status.innerText = "Enter a preset name to save.";
+                return;
+            }
+
+            formPresets[presetName] = collectPresetPayload();
+            persistFormPresets();
+            renderPresetOptions(presetName);
+            status.innerText = `Preset "${presetName}" saved.`;
+        });
+
+        applyPresetBtn.addEventListener("click", () => {
+            const selectedName = presetSelect.value;
+            if (!selectedName || !formPresets[selectedName]) {
+                status.innerText = "Select a valid preset to apply.";
+                return;
+            }
+
+            applyPreset(formPresets[selectedName]);
+            persistFormState();
+            status.innerText = `Preset "${selectedName}" applied.`;
+        });
+
+        deletePresetBtn.addEventListener("click", () => {
+            const selectedName = presetSelect.value;
+            if (!selectedName || !formPresets[selectedName]) {
+                status.innerText = "Select a valid preset to delete.";
+                return;
+            }
+
+            delete formPresets[selectedName];
+            persistFormPresets();
+            if (normalizePresetName(presetNameInput.value) === selectedName) {
+                presetNameInput.value = "";
+            }
+            renderPresetOptions();
+            status.innerText = `Preset "${selectedName}" deleted.`;
+        });
+
+        updatePresetButtons();
+    }
+
+    function collectPresetPayload() {
+        return collectFormPayload();
+    }
+
+    function applyPreset(presetPayload) {
+        for (const id of FORM_PERSIST_IDS) {
+            const field = document.getElementById(id);
+            if (!field) {
+                continue;
+            }
+            field.value = presetPayload[id] ?? "";
+        }
+    }
+
+    function loadFormPresets() {
         try {
-            const payload = {};
-            for (const id of FORM_PERSIST_IDS) {
-                const field = document.getElementById(id);
-                if (!field) {
+            const raw = localStorage.getItem(PRESETS_STORAGE_KEY);
+            if (!raw) {
+                return {};
+            }
+
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+                return {};
+            }
+
+            const sanitized = {};
+            for (const [name, preset] of Object.entries(parsed)) {
+                const normalizedName = normalizePresetName(name);
+                if (!normalizedName || !preset || typeof preset !== "object" || Array.isArray(preset)) {
                     continue;
                 }
-                payload[id] = field.value;
+                sanitized[normalizedName] = preset;
             }
+            return sanitized;
+        } catch (err) {
+            console.error("Failed to load presets:", err);
+            return {};
+        }
+    }
+
+    function persistFormPresets() {
+        try {
+            localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(formPresets));
+        } catch (err) {
+            console.error("Failed to persist presets:", err);
+        }
+    }
+
+    function renderPresetOptions(selectedName = "") {
+        if (!presetSelect) {
+            return;
+        }
+
+        const names = Object.keys(formPresets).sort((a, b) => a.localeCompare(b));
+        const currentSelection = selectedName || presetSelect.value;
+        presetSelect.innerHTML = '<option value="">Select a preset</option>';
+
+        for (const name of names) {
+            const option = document.createElement("option");
+            option.value = name;
+            option.textContent = name;
+            if (name === currentSelection) {
+                option.selected = true;
+            }
+            presetSelect.appendChild(option);
+        }
+
+        updatePresetButtons();
+    }
+
+    function updatePresetButtons() {
+        if (!presetSelect || !savePresetBtn || !applyPresetBtn || !deletePresetBtn || !presetNameInput) {
+            return;
+        }
+
+        const selectedName = presetSelect.value;
+        const hasSelection = Boolean(selectedName && formPresets[selectedName]);
+        const candidateName = normalizePresetName(presetNameInput.value);
+
+        applyPresetBtn.disabled = !hasSelection;
+        deletePresetBtn.disabled = !hasSelection;
+        savePresetBtn.disabled = !candidateName;
+    }
+
+    function normalizePresetName(name) {
+        if (typeof name !== "string") {
+            return "";
+        }
+
+        return name.trim().slice(0, PRESET_MAX_NAME_LENGTH);
+    }
+
+    function initializeHistory() {
+        renderHistoryOptions();
+
+        if (!historySelect || !applyHistoryBtn || !deleteHistoryBtn || !clearHistoryBtn) {
+            return;
+        }
+
+        historySelect.addEventListener("change", updateHistoryButtons);
+
+        applyHistoryBtn.addEventListener("click", () => {
+            const selectedId = historySelect.value;
+            const entry = formHistory.find((item) => item.id === selectedId);
+            if (!entry) {
+                status.innerText = "Select a valid history entry to load.";
+                return;
+            }
+
+            applyPreset(entry.payload);
+            persistFormState();
+            status.innerText = `Loaded history entry from ${formatHistoryTimestamp(entry.savedAt)}.`;
+        });
+
+        deleteHistoryBtn.addEventListener("click", () => {
+            const selectedId = historySelect.value;
+            if (!selectedId) {
+                status.innerText = "Select a history entry to delete.";
+                return;
+            }
+
+            formHistory = formHistory.filter((item) => item.id !== selectedId);
+            persistFormHistory();
+            renderHistoryOptions();
+            status.innerText = "History entry deleted.";
+        });
+
+        clearHistoryBtn.addEventListener("click", () => {
+            formHistory = [];
+            persistFormHistory();
+            renderHistoryOptions();
+            status.innerText = "History cleared.";
+        });
+
+        updateHistoryButtons();
+    }
+
+    function loadFormHistory() {
+        try {
+            const raw = localStorage.getItem(FORM_HISTORY_STORAGE_KEY);
+            if (!raw) {
+                return [];
+            }
+
+            const parsed = JSON.parse(raw);
+            if (!Array.isArray(parsed)) {
+                return [];
+            }
+
+            const sanitized = [];
+            for (const item of parsed) {
+                if (!item || typeof item !== "object" || Array.isArray(item)) {
+                    continue;
+                }
+
+                if (typeof item.id !== "string" || !item.id.trim()) {
+                    continue;
+                }
+
+                if (typeof item.savedAt !== "string" || !item.savedAt.trim()) {
+                    continue;
+                }
+
+                if (!item.payload || typeof item.payload !== "object" || Array.isArray(item.payload)) {
+                    continue;
+                }
+
+                sanitized.push({
+                    id: item.id,
+                    jobId: typeof item.jobId === "string" ? item.jobId : "",
+                    savedAt: item.savedAt,
+                    payload: item.payload
+                });
+            }
+
+            return sanitized.slice(0, FORM_HISTORY_LIMIT);
+        } catch (err) {
+            console.error("Failed to load form history:", err);
+            return [];
+        }
+    }
+
+    function persistFormHistory() {
+        try {
+            localStorage.setItem(FORM_HISTORY_STORAGE_KEY, JSON.stringify(formHistory));
+        } catch (err) {
+            console.error("Failed to persist form history:", err);
+        }
+    }
+
+    function saveHistoryEntry(jobId) {
+        const entry = {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            jobId: typeof jobId === "string" ? jobId : "",
+            savedAt: new Date().toISOString(),
+            payload: collectFormPayload()
+        };
+
+        formHistory = [entry, ...formHistory].slice(0, FORM_HISTORY_LIMIT);
+        persistFormHistory();
+        renderHistoryOptions(entry.id);
+    }
+
+    function renderHistoryOptions(selectedId = "") {
+        if (!historySelect) {
+            return;
+        }
+
+        const currentSelection = selectedId || historySelect.value;
+        historySelect.innerHTML = '<option value="">Select a history entry</option>';
+
+        for (const entry of formHistory) {
+            const option = document.createElement("option");
+            option.value = entry.id;
+            option.textContent = buildHistoryLabel(entry);
+            if (entry.id === currentSelection) {
+                option.selected = true;
+            }
+            historySelect.appendChild(option);
+        }
+
+        updateHistoryButtons();
+    }
+
+    function buildHistoryLabel(entry) {
+        const savedAtLabel = formatHistoryTimestamp(entry.savedAt);
+        const title = entry.payload && typeof entry.payload.title === "string" && entry.payload.title.trim()
+            ? entry.payload.title.trim()
+            : "Untitled";
+        const jobSuffix = entry.jobId ? ` | ${entry.jobId.slice(0, 8)}` : "";
+        return `${savedAtLabel} | ${title}${jobSuffix}`;
+    }
+
+    function formatHistoryTimestamp(isoInstant) {
+        const parsed = new Date(isoInstant);
+        if (Number.isNaN(parsed.getTime())) {
+            return "Unknown time";
+        }
+
+        return parsed.toLocaleString(undefined, {
+            dateStyle: "short",
+            timeStyle: "short"
+        });
+    }
+
+    function updateHistoryButtons() {
+        if (!historySelect || !applyHistoryBtn || !deleteHistoryBtn) {
+            return;
+        }
+
+        const hasSelection = Boolean(historySelect.value);
+        applyHistoryBtn.disabled = !hasSelection;
+        deleteHistoryBtn.disabled = !hasSelection;
+    }
+
+    function collectFormPayload() {
+        const payload = {};
+        for (const id of FORM_PERSIST_IDS) {
+            const field = document.getElementById(id);
+            if (!field) {
+                continue;
+            }
+            payload[id] = field.value;
+        }
+        return payload;
+    }
+
+    function persistFormState() {
+        try {
+            const payload = collectFormPayload();
             localStorage.setItem(FORM_STATE_STORAGE_KEY, JSON.stringify(payload));
         } catch (err) {
             console.error("Failed to persist form state:", err);

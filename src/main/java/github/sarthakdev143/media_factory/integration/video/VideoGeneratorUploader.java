@@ -28,6 +28,7 @@ public class VideoGeneratorUploader {
 
     private static final String FFMPEG_PATH_ENV = "FFMPEG_PATH";
     private static final String DEFAULT_FFMPEG_BINARY = "ffmpeg";
+    private static final String DEFAULT_VIDEO_FILTER = "vignette";
     private static final long MAX_THUMBNAIL_BYTES = 2L * 1024 * 1024;
 
     // YouTube API service (you must configure OAuth2)
@@ -67,6 +68,8 @@ public class VideoGeneratorUploader {
         command.add("23");
         command.add("-pix_fmt");
         command.add("yuv420p");
+        command.add("-vf");
+        command.add(DEFAULT_VIDEO_FILTER);
         command.add("-t");
         command.add(String.valueOf(durationSeconds));
         command.add("-shortest"); // stop when audio ends

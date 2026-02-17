@@ -35,6 +35,7 @@ public class FfmpegService {
     private static final Pattern TIME_WITH_HOURS = Pattern.compile("time=(\\d+):(\\d{2}):(\\d{2}(?:\\.\\d+)?)");
     private static final Pattern TIME_WITH_MINUTES = Pattern.compile("time=(\\d+):(\\d{2}(?:\\.\\d+)?)");
     private static final int MAX_DURATION_SECONDS = 21_600;
+    private static final String DEFAULT_VIDEO_FILTER = "vignette";
     private static final int STDERR_BUFFER_LINES = 80;
     private static final int STDERR_SNIPPET_LINES = 8;
     private static final long COMMAND_TIMEOUT_MIN_SECONDS = 120L;
@@ -108,6 +109,7 @@ public class FfmpegService {
         command.add(String.valueOf(boundedDurationSeconds));
         command.add("-r");
         command.add(String.valueOf(boundedFrameRate));
+        Collections.addAll(command, "-vf", DEFAULT_VIDEO_FILTER);
 
         switch (encoderType) {
             case NVENC -> Collections.addAll(
