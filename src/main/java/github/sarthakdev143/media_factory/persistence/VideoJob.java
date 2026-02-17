@@ -99,6 +99,9 @@ public class VideoJob {
     @Column(name = "duration_seconds", nullable = false)
     private int durationSeconds;
 
+    @Column(name = "vignette_strength_percent")
+    private Integer vignetteStrengthPercent;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -300,6 +303,14 @@ public class VideoJob {
 
     public void setDurationSeconds(int durationSeconds) {
         this.durationSeconds = durationSeconds;
+    }
+
+    public Integer getVignetteStrengthPercent() {
+        return vignetteStrengthPercent;
+    }
+
+    public void setVignetteStrengthPercent(Integer vignetteStrengthPercent) {
+        this.vignetteStrengthPercent = vignetteStrengthPercent;
     }
 
     public Instant getCreatedAt() {

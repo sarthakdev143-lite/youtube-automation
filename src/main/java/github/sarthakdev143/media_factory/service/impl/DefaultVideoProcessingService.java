@@ -54,6 +54,9 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
 
     private static final Logger logger = LoggerFactory.getLogger(DefaultVideoProcessingService.class);
     private static final int MAX_DURATION_SECONDS = 21_600;
+    private static final int MIN_VIGNETTE_STRENGTH_PERCENT = 0;
+    private static final int MAX_VIGNETTE_STRENGTH_PERCENT = 100;
+    private static final int DEFAULT_VIGNETTE_STRENGTH_PERCENT = 40;
     private static final int DEFAULT_OUTPUT_FRAME_RATE = 2;
     private static final int SHUTDOWN_GRACE_SECONDS = 5;
     private static final int ENCODING_WEIGHT_PERCENT = 80;
@@ -135,6 +138,7 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
             MultipartFile image,
             MultipartFile audio,
             int durationSeconds,
+            int vignetteStrengthPercent,
             String title,
             String description,
             PublishOptions publishOptions,
@@ -144,6 +148,7 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
             throw new IllegalArgumentException("Duration must be between 1 and " + MAX_DURATION_SECONDS + " seconds.");
         }
 
+        int normalizedVignetteStrength = normalizeRequestedVignetteStrength(vignetteStrengthPercent);
         PublishOptions normalizedOptions = normalizePublishOptions(publishOptions);
         String sanitizedTitle = sanitizeText(title, 100);
         String sanitizedDescription = sanitizeText(description, 5000);
@@ -199,6 +204,7 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
                     videoJob.setInputAudioPath(audioPathString);
                     videoJob.setInputThumbnailPath(thumbnailPathString);
                     videoJob.setDurationSeconds(durationSeconds);
+                    videoJob.setVignetteStrengthPercent(normalizedVignetteStrength);
                     videoJob.setProgressPercent(0);
                     videoJob.setGenerationProgressPercent(0);
                     videoJob.setUploadProgressPercent(0);
@@ -214,7 +220,11 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
                 throw ex;
             }
 
-            logger.info("[JOB_QUEUED id={} durationSeconds={}]", jobId, durationSeconds);
+            logger.info(
+                    "[JOB_QUEUED id={} durationSeconds={} vignetteStrengthPercent={}]",
+                    jobId,
+                    durationSeconds,
+                    normalizedVignetteStrength);
             return jobId.toString();
         } finally {
             submissionLock.unlock();
@@ -335,7 +345,12 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
         updateOutputPath(jobId, outputPath);
         transitionStage(jobId, VideoJobStage.PREPARING, "Preparing inputs and output path.");
 
-        logger.info("[JOB_STARTED id={} durationSeconds={}]", jobId, job.getDurationSeconds());
+        int resolvedVignetteStrength = resolveStoredVignetteStrength(job.getVignetteStrengthPercent());
+        logger.info(
+                "[JOB_STARTED id={} durationSeconds={} vignetteStrengthPercent={}]",
+                jobId,
+                job.getDurationSeconds(),
+                resolvedVignetteStrength);
 
         try {
             transitionStage(jobId, VideoJobStage.GENERATING, "Generating video with FFmpeg.");
@@ -345,6 +360,7 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
                     outputPath,
                     job.getDurationSeconds(),
                     outputFrameRate > 0 ? outputFrameRate : DEFAULT_OUTPUT_FRAME_RATE,
+                    resolvedVignetteStrength,
                     progressPercent -> persistGenerationProgressIfNeeded(
                             jobId,
                             progressPercent,
@@ -743,6 +759,32 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
                 publishOptions.tags(),
                 publishOptions.categoryId() == null ? DEFAULT_YOUTUBE_CATEGORY_ID : publishOptions.categoryId(),
                 publishOptions.publishAt());
+    }
+
+    private int normalizeRequestedVignetteStrength(int vignetteStrengthPercent) {
+        if (vignetteStrengthPercent < MIN_VIGNETTE_STRENGTH_PERCENT
+                || vignetteStrengthPercent > MAX_VIGNETTE_STRENGTH_PERCENT) {
+            throw new IllegalArgumentException(
+                    "Vignette strength must be between "
+                            + MIN_VIGNETTE_STRENGTH_PERCENT
+                            + " and "
+                            + MAX_VIGNETTE_STRENGTH_PERCENT
+                            + " percent.");
+        }
+        return vignetteStrengthPercent;
+    }
+
+    private int resolveStoredVignetteStrength(Integer storedVignetteStrengthPercent) {
+        if (storedVignetteStrengthPercent == null) {
+            return DEFAULT_VIGNETTE_STRENGTH_PERCENT;
+        }
+
+        if (storedVignetteStrengthPercent < MIN_VIGNETTE_STRENGTH_PERCENT
+                || storedVignetteStrengthPercent > MAX_VIGNETTE_STRENGTH_PERCENT) {
+            return DEFAULT_VIGNETTE_STRENGTH_PERCENT;
+        }
+
+        return storedVignetteStrengthPercent;
     }
 
     private String serializeTags(List<String> tags) {

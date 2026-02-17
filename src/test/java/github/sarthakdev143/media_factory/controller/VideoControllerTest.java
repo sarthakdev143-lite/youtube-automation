@@ -46,7 +46,7 @@ class VideoControllerTest {
 
     @Test
     void generateReturnsAcceptedForValidRequest() throws Exception {
-        when(videoProcessingService.submitJob(any(), any(), anyInt(), anyString(), anyString(), any(PublishOptions.class), any()))
+        when(videoProcessingService.submitJob(any(), any(), anyInt(), anyInt(), anyString(), anyString(), any(PublishOptions.class), any()))
                 .thenReturn("job-123");
 
         mockMvc.perform(multipart("/api/video/generate")
@@ -65,6 +65,7 @@ class VideoControllerTest {
                 any(),
                 any(),
                 eq(60),
+                eq(40),
                 eq("My title"),
                 eq("My description"),
                 publishOptionsCaptor.capture(),
@@ -74,7 +75,7 @@ class VideoControllerTest {
 
     @Test
     void generateReturnsAcceptedForValidPublishingControls() throws Exception {
-        when(videoProcessingService.submitJob(any(), any(), anyInt(), anyString(), anyString(), any(PublishOptions.class), any()))
+        when(videoProcessingService.submitJob(any(), any(), anyInt(), anyInt(), anyString(), anyString(), any(PublishOptions.class), any()))
                 .thenReturn("job-123");
 
         String publishAt = Instant.now().plusSeconds(600).toString();
@@ -86,6 +87,7 @@ class VideoControllerTest {
                         .param("title", "My title")
                         .param("description", "My description")
                         .param("privacyStatus", "private")
+                        .param("vignetteStrength", "70")
                         .param("tags", "music", "MUSIC", "chill")
                         .param("categoryId", "22")
                         .param("publishAt", publishAt))
@@ -96,6 +98,7 @@ class VideoControllerTest {
                 any(),
                 any(),
                 eq(60),
+                eq(70),
                 eq("My title"),
                 eq("My description"),
                 publishOptionsCaptor.capture(),
@@ -235,6 +238,21 @@ class VideoControllerTest {
                         .param("description", "My description"))
                 .andExpect(status().isBadRequest())
                 .andExpect(content().string(containsString("thumbnail must have content type image/jpeg or image/png.")));
+
+        verifyNoInteractions(videoProcessingService);
+    }
+
+    @Test
+    void generateReturnsBadRequestForInvalidVignetteStrength() throws Exception {
+        mockMvc.perform(multipart("/api/video/generate")
+                        .file(validImage())
+                        .file(validAudio())
+                        .param("duration", "60")
+                        .param("vignetteStrength", "101")
+                        .param("title", "My title")
+                        .param("description", "My description"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().string(containsString("vignetteStrength must be between")));
 
         verifyNoInteractions(videoProcessingService);
     }

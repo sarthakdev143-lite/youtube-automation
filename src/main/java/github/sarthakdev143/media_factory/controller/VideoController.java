@@ -35,6 +35,9 @@ public class VideoController {
     private static final Logger logger = LoggerFactory.getLogger(VideoController.class);
     private static final int MIN_DURATION_SECONDS = 1;
     private static final int MAX_DURATION_SECONDS = 21_600;
+    private static final int MIN_VIGNETTE_STRENGTH_PERCENT = 0;
+    private static final int MAX_VIGNETTE_STRENGTH_PERCENT = 100;
+    private static final int DEFAULT_VIGNETTE_STRENGTH_PERCENT = 40;
     private static final int MAX_TITLE_LENGTH = 100;
     private static final int MAX_DESCRIPTION_LENGTH = 5000;
     private static final int MAX_TAGS = 20;
@@ -62,11 +65,13 @@ public class VideoController {
             @RequestParam(value = "tags", required = false) List<String> tagsInput,
             @RequestParam(value = "categoryId", required = false) String categoryIdInput,
             @RequestParam(value = "publishAt", required = false) String publishAtInput,
+            @RequestParam(value = "vignetteStrength", required = false) Integer vignetteStrengthInput,
             @RequestParam(value = "thumbnail", required = false) MultipartFile thumbnail) {
         return submitVideoJob(
                 image,
                 audio,
                 durationSeconds,
+                vignetteStrengthInput,
                 title,
                 description,
                 privacyStatusInput,
@@ -87,11 +92,13 @@ public class VideoController {
             @RequestParam(value = "tags", required = false) List<String> tagsInput,
             @RequestParam(value = "categoryId", required = false) String categoryIdInput,
             @RequestParam(value = "publishAt", required = false) String publishAtInput,
+            @RequestParam(value = "vignetteStrength", required = false) Integer vignetteStrengthInput,
             @RequestParam(value = "thumbnail", required = false) MultipartFile thumbnail) {
         return submitVideoJob(
                 image,
                 audio,
                 durationSeconds,
+                vignetteStrengthInput,
                 title,
                 description,
                 privacyStatusInput,
@@ -112,6 +119,7 @@ public class VideoController {
             MultipartFile image,
             MultipartFile audio,
             int durationSeconds,
+            Integer vignetteStrengthInput,
             String title,
             String description,
             String privacyStatusInput,
@@ -121,6 +129,7 @@ public class VideoController {
             MultipartFile thumbnail) {
         try {
             validateBaseRequest(image, audio, durationSeconds, title, description);
+            int normalizedVignetteStrength = normalizeVignetteStrength(vignetteStrengthInput);
             PublishOptions publishOptions = validateAndBuildPublishOptions(
                     privacyStatusInput,
                     tagsInput,
@@ -132,6 +141,7 @@ public class VideoController {
                     image,
                     audio,
                     durationSeconds,
+                    normalizedVignetteStrength,
                     title,
                     description,
                     publishOptions,
@@ -194,6 +204,24 @@ public class VideoController {
         if (description.length() > MAX_DESCRIPTION_LENGTH) {
             throw new IllegalArgumentException("Description must be at most " + MAX_DESCRIPTION_LENGTH + " characters.");
         }
+    }
+
+    private int normalizeVignetteStrength(Integer vignetteStrengthInput) {
+        if (vignetteStrengthInput == null) {
+            return DEFAULT_VIGNETTE_STRENGTH_PERCENT;
+        }
+
+        if (vignetteStrengthInput < MIN_VIGNETTE_STRENGTH_PERCENT
+                || vignetteStrengthInput > MAX_VIGNETTE_STRENGTH_PERCENT) {
+            throw new IllegalArgumentException(
+                    "vignetteStrength must be between "
+                            + MIN_VIGNETTE_STRENGTH_PERCENT
+                            + " and "
+                            + MAX_VIGNETTE_STRENGTH_PERCENT
+                            + ".");
+        }
+
+        return vignetteStrengthInput;
     }
 
     private PublishOptions validateAndBuildPublishOptions(

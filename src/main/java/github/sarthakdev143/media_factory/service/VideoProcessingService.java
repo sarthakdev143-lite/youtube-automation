@@ -14,6 +14,7 @@ public interface VideoProcessingService {
             MultipartFile image,
             MultipartFile audio,
             int durationSeconds,
+            int vignetteStrengthPercent,
             String title,
             String description,
             PublishOptions publishOptions,

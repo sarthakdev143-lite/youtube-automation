@@ -102,6 +102,66 @@
             margin-top: 6px;
         }
 
+        .range-label {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 12px;
+            color: var(--muted);
+            margin-top: 6px;
+        }
+
+        .preview-frame {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            overflow: hidden;
+            background: #090909;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .preview-frame img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: none;
+        }
+
+        .preview-frame.has-image img {
+            display: block;
+        }
+
+        .preview-vignette-overlay {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 120ms linear;
+            background: radial-gradient(circle at center,
+                    rgba(0, 0, 0, 0) 34%,
+                    rgba(0, 0, 0, var(--vignette-mid-opacity, 0.00)) 70%,
+                    rgba(0, 0, 0, var(--vignette-edge-opacity, 0.00)) 100%);
+        }
+
+        .preview-frame.has-image .preview-vignette-overlay {
+            opacity: 1;
+        }
+
+        .preview-empty {
+            font-size: 12px;
+            color: var(--muted);
+            padding: 12px;
+            text-align: center;
+        }
+
+        .preview-frame.has-image .preview-empty {
+            display: none;
+        }
+
         .preset-controls {
             border: 1px solid var(--border);
             border-radius: 10px;
@@ -205,8 +265,27 @@
             </div>
 
             <div>
+                <label for="vignetteStrength">Vignette Strength</label>
+                <input type="range" id="vignetteStrength" min="0" max="100" step="1" value="40">
+                <div class="range-label">
+                    <span>Subtle</span>
+                    <span id="vignetteStrengthValue">40%</span>
+                    <span>Strong</span>
+                </div>
+            </div>
+
+            <div>
                 <label for="audio">Audio</label>
                 <input type="file" id="audio" accept="audio/*" required>
+            </div>
+
+            <div class="full">
+                <label>Vignette Preview</label>
+                <div class="preview-frame" id="vignettePreviewFrame">
+                    <img id="imagePreview" alt="Selected image preview">
+                    <div class="preview-vignette-overlay" id="vignettePreviewOverlay"></div>
+                    <div class="preview-empty" id="imagePreviewEmpty">Select an image to preview the vignette effect.</div>
+                </div>
             </div>
 
             <div>
@@ -270,9 +349,17 @@
     const FORM_STATE_STORAGE_KEY = "mediaFactory.formState";
     const PRESETS_STORAGE_KEY = "mediaFactory.formPresets";
     const FORM_HISTORY_STORAGE_KEY = "mediaFactory.formHistory";
-    const FORM_PERSIST_IDS = ["duration", "title", "description", "privacyStatus", "tags", "categoryId", "publishAt"];
+    const VIGNETTE_DEFAULT_STRENGTH = 40;
+    const FORM_PERSIST_IDS = ["duration", "vignetteStrength", "title", "description", "privacyStatus", "tags", "categoryId", "publishAt"];
     const PRESET_MAX_NAME_LENGTH = 50;
     const FORM_HISTORY_LIMIT = 20;
+    const imageInput = document.getElementById("image");
+    const vignetteStrengthInput = document.getElementById("vignetteStrength");
+    const vignetteStrengthValue = document.getElementById("vignetteStrengthValue");
+    const vignettePreviewFrame = document.getElementById("vignettePreviewFrame");
+    const imagePreview = document.getElementById("imagePreview");
+    const imagePreviewEmpty = document.getElementById("imagePreviewEmpty");
+    const vignettePreviewOverlay = document.getElementById("vignettePreviewOverlay");
     const presetSelect = document.getElementById("presetSelect");
     const presetNameInput = document.getElementById("presetName");
     const applyPresetBtn = document.getElementById("applyPresetBtn");
@@ -285,20 +372,23 @@
     let formPresets = loadFormPresets();
     let formHistory = loadFormHistory();
     let activePoll = null;
+    let previewObjectUrl = null;
 
     restoreFormState();
     initializePresets();
     initializeHistory();
+    initializeVignetteControls();
     attachFormPersistence();
     restoreJobTracking();
 
     form.addEventListener("submit", async (e) => {
         e.preventDefault();
 
-        const imageFile = document.getElementById("image").files[0];
+        const imageFile = imageInput ? imageInput.files[0] : null;
         const audioFile = document.getElementById("audio").files[0];
         const thumbnailFile = document.getElementById("thumbnail").files[0];
         const duration = document.getElementById("duration").value;
+        const vignetteStrength = readVignetteStrengthPercent();
         const title = document.getElementById("title").value;
         const description = document.getElementById("description").value;
         const privacyStatus = document.getElementById("privacyStatus").value;
@@ -317,6 +407,7 @@
         formData.append("image", imageFile);
         formData.append("audio", audioFile);
         formData.append("duration", duration);
+        formData.append("vignetteStrength", String(vignetteStrength));
         formData.append("title", title);
         formData.append("description", description);
         formData.append("privacyStatus", privacyStatus);
@@ -481,6 +572,74 @@
         }
     }
 
+    function initializeVignetteControls() {
+        if (!vignetteStrengthInput || !vignetteStrengthValue) {
+            return;
+        }
+
+        updateVignetteStrengthUi();
+        updateImagePreview();
+
+        vignetteStrengthInput.addEventListener("input", () => {
+            updateVignetteStrengthUi();
+        });
+
+        if (imageInput) {
+            imageInput.addEventListener("change", updateImagePreview);
+        }
+    }
+
+    function readVignetteStrengthPercent() {
+        if (!vignetteStrengthInput) {
+            return VIGNETTE_DEFAULT_STRENGTH;
+        }
+
+        const parsedStrength = Number.parseInt(vignetteStrengthInput.value, 10);
+        if (Number.isNaN(parsedStrength)) {
+            return VIGNETTE_DEFAULT_STRENGTH;
+        }
+
+        return Math.min(100, Math.max(0, parsedStrength));
+    }
+
+    function updateVignetteStrengthUi() {
+        if (!vignetteStrengthInput || !vignetteStrengthValue || !vignettePreviewOverlay) {
+            return;
+        }
+
+        const strengthPercent = readVignetteStrengthPercent();
+        vignetteStrengthInput.value = String(strengthPercent);
+        vignetteStrengthValue.textContent = `${strengthPercent}%`;
+
+        const normalized = strengthPercent / 100;
+        const midOpacity = (0.40 * normalized).toFixed(3);
+        const edgeOpacity = (0.90 * normalized).toFixed(3);
+        vignettePreviewOverlay.style.setProperty("--vignette-mid-opacity", midOpacity);
+        vignettePreviewOverlay.style.setProperty("--vignette-edge-opacity", edgeOpacity);
+    }
+
+    function updateImagePreview() {
+        if (!imageInput || !imagePreview || !imagePreviewEmpty || !vignettePreviewFrame) {
+            return;
+        }
+
+        if (previewObjectUrl) {
+            URL.revokeObjectURL(previewObjectUrl);
+            previewObjectUrl = null;
+        }
+
+        const file = imageInput.files && imageInput.files.length > 0 ? imageInput.files[0] : null;
+        if (!file) {
+            imagePreview.removeAttribute("src");
+            vignettePreviewFrame.classList.remove("has-image");
+            return;
+        }
+
+        previewObjectUrl = URL.createObjectURL(file);
+        imagePreview.src = previewObjectUrl;
+        vignettePreviewFrame.classList.add("has-image");
+    }
+
     function attachFormPersistence() {
         for (const id of FORM_PERSIST_IDS) {
             const field = document.getElementById(id);
@@ -565,6 +724,7 @@
             }
             field.value = presetPayload[id] ?? "";
         }
+        updateVignetteStrengthUi();
     }
 
     function loadFormPresets() {
@@ -845,6 +1005,7 @@
                 }
                 field.value = payload[id];
             }
+            updateVignetteStrengthUi();
         } catch (err) {
             console.error("Failed to restore form state:", err);
         }

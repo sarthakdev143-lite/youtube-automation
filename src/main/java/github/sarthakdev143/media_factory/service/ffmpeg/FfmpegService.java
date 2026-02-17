@@ -35,7 +35,10 @@ public class FfmpegService {
     private static final Pattern TIME_WITH_HOURS = Pattern.compile("time=(\\d+):(\\d{2}):(\\d{2}(?:\\.\\d+)?)");
     private static final Pattern TIME_WITH_MINUTES = Pattern.compile("time=(\\d+):(\\d{2}(?:\\.\\d+)?)");
     private static final int MAX_DURATION_SECONDS = 21_600;
-    private static final String DEFAULT_VIDEO_FILTER = "vignette";
+    private static final int MIN_VIGNETTE_STRENGTH_PERCENT = 0;
+    private static final int MAX_VIGNETTE_STRENGTH_PERCENT = 100;
+    private static final double MIN_VIGNETTE_ANGLE_RADIANS = 0.0d;
+    private static final double MAX_VIGNETTE_ANGLE_RADIANS = Math.PI / 2.0d;
     private static final int STDERR_BUFFER_LINES = 80;
     private static final int STDERR_SNIPPET_LINES = 8;
     private static final long COMMAND_TIMEOUT_MIN_SECONDS = 120L;
@@ -62,6 +65,7 @@ public class FfmpegService {
             Path outputPath,
             int requestedDurationSeconds,
             int outputFrameRate,
+            int vignetteStrengthPercent,
             FfmpegEncoderDetector.EncoderType encoderType) {
         return buildCommand(
                 imagePath,
@@ -69,6 +73,7 @@ public class FfmpegService {
                 outputPath,
                 requestedDurationSeconds,
                 outputFrameRate,
+                vignetteStrengthPercent,
                 encoderType,
                 ImageInputRateMode.FRAMERATE_OPTION);
     }
@@ -79,6 +84,7 @@ public class FfmpegService {
             Path outputPath,
             int requestedDurationSeconds,
             int outputFrameRate,
+            int vignetteStrengthPercent,
             FfmpegEncoderDetector.EncoderType encoderType,
             ImageInputRateMode imageInputRateMode) {
 
@@ -109,7 +115,7 @@ public class FfmpegService {
         command.add(String.valueOf(boundedDurationSeconds));
         command.add("-r");
         command.add(String.valueOf(boundedFrameRate));
-        Collections.addAll(command, "-vf", DEFAULT_VIDEO_FILTER);
+        Collections.addAll(command, "-vf", resolveVignetteFilter(vignetteStrengthPercent));
 
         switch (encoderType) {
             case NVENC -> Collections.addAll(
@@ -148,6 +154,7 @@ public class FfmpegService {
             Path outputPath,
             int requestedDurationSeconds,
             int outputFrameRate,
+            int vignetteStrengthPercent,
             Consumer<Integer> progressCallback,
             Consumer<Process> processCallback,
             Path ffmpegLogPath) throws IOException, InterruptedException {
@@ -166,6 +173,7 @@ public class FfmpegService {
                         outputPath,
                         boundedDurationSeconds,
                         outputFrameRate,
+                        vignetteStrengthPercent,
                         encoderType,
                         requiresInputRateCompatibility ? ImageInputRateMode.INPUT_R_OPTION : ImageInputRateMode.FRAMERATE_OPTION);
                 runCommand(command, boundedDurationSeconds, progressCallback, processCallback, ffmpegLogPath);
@@ -183,6 +191,7 @@ public class FfmpegService {
                                 outputPath,
                                 boundedDurationSeconds,
                                 outputFrameRate,
+                                vignetteStrengthPercent,
                                 encoderType,
                                 ImageInputRateMode.INPUT_R_OPTION);
                         runCommand(
@@ -398,6 +407,24 @@ public class FfmpegService {
         }
         String normalized = message.toLowerCase(Locale.ROOT);
         return normalized.contains("option framerate not found");
+    }
+
+    private String resolveVignetteFilter(int vignetteStrengthPercent) {
+        int boundedStrength = clampVignetteStrength(vignetteStrengthPercent);
+        double ratio = boundedStrength / 100.0d;
+        double angle = MIN_VIGNETTE_ANGLE_RADIANS
+                + ((MAX_VIGNETTE_ANGLE_RADIANS - MIN_VIGNETTE_ANGLE_RADIANS) * ratio);
+        return String.format(Locale.ROOT, "vignette=angle=%.6f", angle);
+    }
+
+    private int clampVignetteStrength(int vignetteStrengthPercent) {
+        if (vignetteStrengthPercent < MIN_VIGNETTE_STRENGTH_PERCENT) {
+            return MIN_VIGNETTE_STRENGTH_PERCENT;
+        }
+        if (vignetteStrengthPercent > MAX_VIGNETTE_STRENGTH_PERCENT) {
+            return MAX_VIGNETTE_STRENGTH_PERCENT;
+        }
+        return vignetteStrengthPercent;
     }
 
     private String stderrTail(List<String> stderrLines) {
