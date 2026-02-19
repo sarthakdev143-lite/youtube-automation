@@ -4,11 +4,8 @@ import github.sarthakdev143.media_factory.dto.VideoJobSubmissionResponse;
 import github.sarthakdev143.media_factory.model.PrivacyStatus;
 import github.sarthakdev143.media_factory.model.PublishOptions;
 import github.sarthakdev143.media_factory.model.VideoJobState;
-import github.sarthakdev143.media_factory.service.ActiveJobConflictException;
 import github.sarthakdev143.media_factory.service.VideoProcessingService;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -19,6 +16,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
@@ -32,7 +30,6 @@ import java.util.regex.Pattern;
 @RequestMapping("/api/video")
 public class VideoController {
 
-    private static final Logger logger = LoggerFactory.getLogger(VideoController.class);
     private static final int MIN_DURATION_SECONDS = 1;
     private static final int MAX_DURATION_SECONDS = 21_600;
     private static final int MIN_VIGNETTE_STRENGTH_PERCENT = 0;
@@ -66,7 +63,7 @@ public class VideoController {
             @RequestParam(value = "categoryId", required = false) String categoryIdInput,
             @RequestParam(value = "publishAt", required = false) String publishAtInput,
             @RequestParam(value = "vignetteStrength", required = false) Integer vignetteStrengthInput,
-            @RequestParam(value = "thumbnail", required = false) MultipartFile thumbnail) {
+            @RequestParam(value = "thumbnail", required = false) MultipartFile thumbnail) throws IOException {
         return submitVideoJob(
                 image,
                 audio,
@@ -93,7 +90,7 @@ public class VideoController {
             @RequestParam(value = "categoryId", required = false) String categoryIdInput,
             @RequestParam(value = "publishAt", required = false) String publishAtInput,
             @RequestParam(value = "vignetteStrength", required = false) Integer vignetteStrengthInput,
-            @RequestParam(value = "thumbnail", required = false) MultipartFile thumbnail) {
+            @RequestParam(value = "thumbnail", required = false) MultipartFile thumbnail) throws IOException {
         return submitVideoJob(
                 image,
                 audio,
@@ -112,10 +109,29 @@ public class VideoController {
     public ResponseEntity<?> getActiveStatus() {
         return videoProcessingService.getActiveJobStatus()
                 .<ResponseEntity<?>>map(ResponseEntity::ok)
-                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).body("No active jobs."));
+                .orElseThrow(() -> new ApiException(
+                        HttpStatus.NOT_FOUND,
+                        "NO_ACTIVE_JOB",
+                        "No active jobs.",
+                        null));
     }
 
-    private ResponseEntity<?> submitVideoJob(
+    @PostMapping("/status/{jobId}/cancel")
+    public ResponseEntity<?> cancelJob(@PathVariable String jobId) {
+        return ResponseEntity.ok(videoProcessingService.cancelJob(jobId));
+    }
+
+    @PostMapping("/status/{jobId}/retry")
+    public ResponseEntity<?> retryJob(@PathVariable String jobId) throws IOException {
+        String retriedJobId = videoProcessingService.retryJob(jobId);
+        return ResponseEntity.accepted()
+                .body(new VideoJobSubmissionResponse(
+                        retriedJobId,
+                        VideoJobState.QUEUED,
+                        "Retry job accepted. Poll /api/video/status/{jobId} for progress."));
+    }
+
+    private ResponseEntity<VideoJobSubmissionResponse> submitVideoJob(
             MultipartFile image,
             MultipartFile audio,
             int durationSeconds,
@@ -126,47 +142,41 @@ public class VideoController {
             List<String> tagsInput,
             String categoryIdInput,
             String publishAtInput,
-            MultipartFile thumbnail) {
-        try {
-            validateBaseRequest(image, audio, durationSeconds, title, description);
-            int normalizedVignetteStrength = normalizeVignetteStrength(vignetteStrengthInput);
-            PublishOptions publishOptions = validateAndBuildPublishOptions(
-                    privacyStatusInput,
-                    tagsInput,
-                    categoryIdInput,
-                    publishAtInput,
-                    thumbnail);
+            MultipartFile thumbnail) throws IOException {
+        validateBaseRequest(image, audio, durationSeconds, title, description);
+        int normalizedVignetteStrength = normalizeVignetteStrength(vignetteStrengthInput);
+        PublishOptions publishOptions = validateAndBuildPublishOptions(
+                privacyStatusInput,
+                tagsInput,
+                categoryIdInput,
+                publishAtInput,
+                thumbnail);
 
-            String jobId = videoProcessingService.submitJob(
-                    image,
-                    audio,
-                    durationSeconds,
-                    normalizedVignetteStrength,
-                    title,
-                    description,
-                    publishOptions,
-                    thumbnail);
-            return ResponseEntity.accepted()
-                    .body(new VideoJobSubmissionResponse(
-                            jobId,
-                            VideoJobState.QUEUED,
-                            "Video job accepted. Poll /api/video/status/{jobId} for progress."));
-        } catch (ActiveJobConflictException conflict) {
-            return ResponseEntity.status(HttpStatus.CONFLICT).body(conflict.getActiveJob());
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body("Invalid request: " + e.getMessage());
-        } catch (Exception e) {
-            logger.error("Video generation/upload failed", e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body("Failed to generate or upload video. Please try again.");
-        }
+        String jobId = videoProcessingService.submitJob(
+                image,
+                audio,
+                durationSeconds,
+                normalizedVignetteStrength,
+                title,
+                description,
+                publishOptions,
+                thumbnail);
+        return ResponseEntity.accepted()
+                .body(new VideoJobSubmissionResponse(
+                        jobId,
+                        VideoJobState.QUEUED,
+                        "Video job accepted. Poll /api/video/status/{jobId} for progress."));
     }
 
     @GetMapping("/status/{jobId}")
     public ResponseEntity<?> getStatus(@PathVariable String jobId) {
         return videoProcessingService.getJobStatus(jobId)
                 .<ResponseEntity<?>>map(ResponseEntity::ok)
-                .orElseGet(() -> ResponseEntity.status(HttpStatus.NOT_FOUND).body("Job not found for id: " + jobId));
+                .orElseThrow(() -> new ApiException(
+                        HttpStatus.NOT_FOUND,
+                        "JOB_NOT_FOUND",
+                        "Job not found for id: " + jobId,
+                        "jobId"));
     }
 
     private void validateBaseRequest(

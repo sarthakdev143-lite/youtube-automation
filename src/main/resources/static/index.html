@@ -441,7 +441,7 @@
 
             const contentType = response.headers.get("content-type") || "";
             if (!response.ok) {
-                status.innerText = await response.text();
+                status.innerText = await readErrorMessage(response);
                 return;
             }
 
@@ -1048,6 +1048,27 @@
             .replace(/'/g, "&#39;");
     }
 
+    async function readErrorMessage(response) {
+        const contentType = response.headers.get("content-type") || "";
+        if (contentType.includes("application/json")) {
+            try {
+                const payload = await response.json();
+                if (payload && typeof payload.message === "string" && payload.message.trim()) {
+                    return payload.message;
+                }
+            } catch (err) {
+                // Fall back to plain text handling below.
+            }
+        }
+
+        try {
+            const rawText = await response.text();
+            return rawText && rawText.trim() ? rawText : `Request failed (${response.status}).`;
+        } catch (err) {
+            return `Request failed (${response.status}).`;
+        }
+    }
+
     function formatTimestamp(isoInstant) {
         const parsed = new Date(isoInstant);
         if (Number.isNaN(parsed.getTime())) {
@@ -1069,7 +1090,7 @@
             try {
                 const response = await fetch(`/api/video/status/${jobId}`);
                 if (!response.ok) {
-                    status.innerText = await response.text();
+                    status.innerText = await readErrorMessage(response);
                     if (response.status === 404) {
                         clearActiveJobId();
                     }

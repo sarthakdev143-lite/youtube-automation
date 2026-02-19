@@ -23,4 +23,8 @@ public interface VideoProcessingService {
     Optional<VideoJobStatus> getJobStatus(String jobId);
 
     Optional<VideoJobStatus> getActiveJobStatus();
+
+    VideoJobStatus cancelJob(String jobId);
+
+    String retryJob(String jobId) throws IOException;
 }

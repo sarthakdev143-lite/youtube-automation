@@ -1,4 +1,6 @@
 package github.sarthakdev143.media_factory.service.impl;
+
+import github.sarthakdev143.media_factory.controller.ApiException;
 import github.sarthakdev143.media_factory.factory.VideoGeneratorUploaderFactory;
 import github.sarthakdev143.media_factory.integration.video.VideoGeneratorUploader;
 import github.sarthakdev143.media_factory.integration.youtube.YouTubeServiceProvider;
@@ -21,6 +23,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -63,6 +66,7 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
     private static final int UPLOAD_WEIGHT_PERCENT = 19;
     private static final int THUMBNAIL_WEIGHT_PERCENT = 1;
     private static final String DEFAULT_YOUTUBE_CATEGORY_ID = "10";
+    private static final String USER_CANCELLED_MESSAGE = "Cancelled by user.";
 
     private final YouTubeServiceProvider youTubeServiceProvider;
     private final VideoGeneratorUploaderFactory uploaderFactory;
@@ -247,6 +251,144 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
             return processing.map(this::toStatus);
         }
         return videoJobRepository.findFirstByStateOrderByCreatedAtAsc(VideoJobState.QUEUED).map(this::toStatus);
+    }
+
+    @Override
+    public VideoJobStatus cancelJob(String jobId) {
+        UUID uuid = parseRequiredJobId(jobId);
+        final boolean[] shouldStopActiveProcess = {false};
+
+        VideoJob cancelledJob = transactionTemplate.execute(status -> {
+            VideoJob job = findJobOrThrow(uuid, jobId);
+
+            if (job.getState() == VideoJobState.COMPLETED) {
+                throw new ApiException(
+                        HttpStatus.CONFLICT,
+                        "CANCEL_NOT_ALLOWED",
+                        "Completed jobs cannot be cancelled.",
+                        "jobId");
+            }
+            if (job.getState() == VideoJobState.FAILED) {
+                return job;
+            }
+
+            if (job.getState() == VideoJobState.PROCESSING) {
+                shouldStopActiveProcess[0] = true;
+            }
+
+            job.setState(VideoJobState.FAILED);
+            job.setJobStage(VideoJobStage.FAILED);
+            job.setStageDetail(USER_CANCELLED_MESSAGE);
+            job.setErrorMessage(USER_CANCELLED_MESSAGE);
+            return videoJobRepository.save(job);
+        });
+
+        if (cancelledJob == null) {
+            throw new ApiException(
+                    HttpStatus.INTERNAL_SERVER_ERROR,
+                    "INTERNAL_ERROR",
+                    "Failed to cancel job. Please retry.",
+                    "jobId");
+        }
+
+        if (shouldStopActiveProcess[0]) {
+            stopActiveProcessForJob(uuid);
+        }
+
+        return toStatus(videoJobRepository.findById(uuid).orElse(cancelledJob));
+    }
+
+    @Override
+    public String retryJob(String jobId) throws IOException {
+        UUID sourceJobId = parseRequiredJobId(jobId);
+
+        submissionLock.lock();
+        try {
+            Optional<VideoJob> activeProcessingJob = videoJobRepository.findFirstByStateOrderByCreatedAtAsc(VideoJobState.PROCESSING);
+            if (activeProcessingJob.isPresent()) {
+                throw new ActiveJobConflictException(toStatus(activeProcessingJob.get()));
+            }
+
+            VideoJob sourceJob = findJobOrThrow(sourceJobId, jobId);
+            if (sourceJob.getState() != VideoJobState.FAILED) {
+                throw new ApiException(
+                        HttpStatus.CONFLICT,
+                        "RETRY_NOT_ALLOWED",
+                        "Only FAILED jobs can be retried.",
+                        "jobId");
+            }
+
+            UUID retryJobId = UUID.randomUUID();
+
+            Path imagePath = null;
+            Path audioPath = null;
+            Path thumbnailPath = null;
+            try {
+                Path sourceImagePath = resolveRequiredRetrySourcePath(sourceJob.getInputImagePath(), sourceJobId, "image");
+                Path sourceAudioPath = resolveRequiredRetrySourcePath(sourceJob.getInputAudioPath(), sourceJobId, "audio");
+                Path sourceThumbnailPath = resolveOptionalRetrySourcePath(sourceJob.getInputThumbnailPath(), sourceJobId);
+
+                imagePath = copyRetryInput(retryJobId, "image", sourceImagePath, ".jpg");
+                audioPath = copyRetryInput(retryJobId, "audio", sourceAudioPath, ".mp3");
+                if (sourceThumbnailPath != null) {
+                    thumbnailPath = copyRetryInput(retryJobId, "thumbnail", sourceThumbnailPath, ".jpg");
+                }
+            } catch (Exception ex) {
+                safeDelete(imagePath);
+                safeDelete(audioPath);
+                safeDelete(thumbnailPath);
+                throw ex;
+            }
+
+            String imagePathString = imagePath.toAbsolutePath().toString();
+            String audioPathString = audioPath.toAbsolutePath().toString();
+            String thumbnailPathString = thumbnailPath == null ? null : thumbnailPath.toAbsolutePath().toString();
+
+            try {
+                transactionTemplate.executeWithoutResult(tx -> {
+                    Optional<VideoJob> processingJob = videoJobRepository.findFirstByStateOrderByCreatedAtAsc(VideoJobState.PROCESSING);
+                    if (processingJob.isPresent()) {
+                        throw new ActiveJobConflictException(toStatus(processingJob.get()));
+                    }
+
+                    VideoJob retryJob = new VideoJob();
+                    retryJob.setId(retryJobId);
+                    retryJob.setState(VideoJobState.QUEUED);
+                    retryJob.setJobStage(VideoJobStage.QUEUED);
+                    retryJob.setStageDetail("Retry queued from failed job " + sourceJobId + ".");
+                    retryJob.setTitle(sourceJob.getTitle());
+                    retryJob.setDescription(sourceJob.getDescription());
+                    retryJob.setPrivacyStatus(sourceJob.getPrivacyStatus());
+                    retryJob.setTags(sourceJob.getTags());
+                    retryJob.setCategoryId(sourceJob.getCategoryId());
+                    retryJob.setPublishAt(sourceJob.getPublishAt());
+                    retryJob.setInputImagePath(imagePathString);
+                    retryJob.setInputAudioPath(audioPathString);
+                    retryJob.setInputThumbnailPath(thumbnailPathString);
+                    retryJob.setDurationSeconds(sourceJob.getDurationSeconds());
+                    retryJob.setVignetteStrengthPercent(resolveStoredVignetteStrength(sourceJob.getVignetteStrengthPercent()));
+                    retryJob.setProgressPercent(0);
+                    retryJob.setGenerationProgressPercent(0);
+                    retryJob.setUploadProgressPercent(0);
+                    retryJob.setUploadState(null);
+                    retryJob.setYoutubeVideoId(null);
+                    retryJob.setOutputPath(null);
+                    retryJob.setErrorMessage(null);
+                    retryJob.setWarningMessage(null);
+                    videoJobRepository.save(retryJob);
+                });
+            } catch (RuntimeException ex) {
+                safeDelete(imagePath);
+                safeDelete(audioPath);
+                safeDelete(thumbnailPath);
+                throw ex;
+            }
+
+            logger.info("[JOB_RETRY_QUEUED id={} sourceJobId={}]", retryJobId, sourceJobId);
+            return retryJobId.toString();
+        } finally {
+            submissionLock.unlock();
+        }
     }
 
     @PreDestroy
@@ -572,6 +714,9 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
             if (job == null) {
                 return;
             }
+            if (job.getState() == VideoJobState.FAILED) {
+                return;
+            }
             job.setState(VideoJobState.FAILED);
             job.setJobStage(VideoJobStage.FAILED);
             job.setStageDetail(errorMessage);
@@ -740,6 +885,93 @@ public class DefaultVideoProcessingService implements VideoProcessingService {
             case COMPLETED -> VideoJobStage.COMPLETED;
             case FAILED -> VideoJobStage.FAILED;
         };
+    }
+
+    private UUID parseRequiredJobId(String jobId) {
+        UUID parsed = parseJobId(jobId);
+        if (parsed == null) {
+            throw new ApiException(
+                    HttpStatus.BAD_REQUEST,
+                    "INVALID_REQUEST",
+                    "jobId must be a valid UUID.",
+                    "jobId");
+        }
+        return parsed;
+    }
+
+    private VideoJob findJobOrThrow(UUID jobUuid, String rawJobId) {
+        return videoJobRepository.findById(jobUuid)
+                .orElseThrow(() -> new ApiException(
+                        HttpStatus.NOT_FOUND,
+                        "JOB_NOT_FOUND",
+                        "Job not found for id: " + rawJobId,
+                        "jobId"));
+    }
+
+    private void stopActiveProcessForJob(UUID jobId) {
+        UUID activeJobId = activeProcessingJobId.get();
+        if (activeJobId == null || !activeJobId.equals(jobId)) {
+            return;
+        }
+
+        Process process = activeFfmpegProcess.get();
+        if (process == null || !process.isAlive()) {
+            return;
+        }
+
+        process.destroy();
+        try {
+            if (!process.waitFor(SHUTDOWN_GRACE_SECONDS, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private Path resolveRequiredRetrySourcePath(String rawPath, UUID sourceJobId, String fieldName) {
+        Path sourcePath = resolveOptionalRetrySourcePath(rawPath, sourceJobId);
+        if (sourcePath == null) {
+            throw new ApiException(
+                    HttpStatus.CONFLICT,
+                    "RETRY_SOURCE_MISSING",
+                    "Cannot retry job because required " + fieldName + " input is missing on disk.",
+                    fieldName);
+        }
+        return sourcePath;
+    }
+
+    private Path resolveOptionalRetrySourcePath(String rawPath, UUID sourceJobId) {
+        Path originalPath = safePath(rawPath);
+        if (originalPath == null) {
+            return null;
+        }
+
+        if (Files.exists(originalPath)) {
+            return originalPath;
+        }
+
+        String fileName = originalPath.getFileName().toString();
+        Path failedPath = originalPath.resolveSibling("failed-" + sourceJobId + "-" + fileName);
+        if (Files.exists(failedPath)) {
+            return failedPath;
+        }
+
+        return null;
+    }
+
+    private Path copyRetryInput(UUID retryJobId, String label, Path sourcePath, String fallbackExtension) throws IOException {
+        String sourceName = sourcePath.getFileName().toString();
+        String safeBaseName = safeFilenameBase(sourceName, label);
+        String extension = sanitizeExtension(extensionFromName(sourceName), fallbackExtension);
+        String targetName = retryJobId + "-" + label + "-" + safeBaseName + extension;
+        Path targetPath = inputDirectory.resolve(targetName).normalize();
+        if (!targetPath.startsWith(inputDirectory)) {
+            throw new IOException("Path traversal attempt blocked for retry " + label + " input.");
+        }
+
+        Files.copy(sourcePath, targetPath, StandardCopyOption.REPLACE_EXISTING);
+        return targetPath;
     }
 
     private UUID parseJobId(String jobId) {

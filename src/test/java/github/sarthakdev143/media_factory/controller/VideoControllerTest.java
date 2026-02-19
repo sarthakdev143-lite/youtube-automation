@@ -22,6 +22,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -31,6 +32,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -113,14 +115,17 @@ class VideoControllerTest {
 
     @Test
     void generateReturnsBadRequestForInvalidDuration() throws Exception {
-        mockMvc.perform(multipart("/api/video/generate")
+                mockMvc.perform(multipart("/api/video/generate")
                         .file(validImage())
                         .file(validAudio())
                         .param("duration", "0")
                         .param("title", "My title")
                         .param("description", "My description"))
                 .andExpect(status().isBadRequest())
-                .andExpect(content().string(containsString("Duration must be between")));
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.message", containsString("Duration must be between")))
+                .andExpect(jsonPath("$.field").value(nullValue()));
 
         verifyNoInteractions(videoProcessingService);
     }
@@ -140,7 +145,9 @@ class VideoControllerTest {
                         .param("title", "My title")
                         .param("description", "My description"))
                 .andExpect(status().isBadRequest())
-                .andExpect(content().string(containsString("image must have a image/* content type.")));
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.message", containsString("image must have a image/* content type.")));
 
         verifyNoInteractions(videoProcessingService);
     }
@@ -155,7 +162,9 @@ class VideoControllerTest {
                         .param("description", "My description")
                         .param("privacyStatus", "friends-only"))
                 .andExpect(status().isBadRequest())
-                .andExpect(content().string(containsString("privacyStatus must be one of")));
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.message", containsString("privacyStatus must be one of")));
 
         verifyNoInteractions(videoProcessingService);
     }
@@ -170,7 +179,9 @@ class VideoControllerTest {
                         .param("description", "My description")
                         .param("publishAt", "2026-02-20T18:30:00+05:30"))
                 .andExpect(status().isBadRequest())
-                .andExpect(content().string(containsString("publishAt must be an ISO-8601 UTC instant ending with Z.")));
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.message", containsString("publishAt must be an ISO-8601 UTC instant ending with Z.")));
 
         verifyNoInteractions(videoProcessingService);
     }
@@ -185,7 +196,9 @@ class VideoControllerTest {
                         .param("description", "My description")
                         .param("publishAt", Instant.now().plusSeconds(30).toString()))
                 .andExpect(status().isBadRequest())
-                .andExpect(content().string(containsString("at least 5 minutes in the future")));
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.message", containsString("at least 5 minutes in the future")));
 
         verifyNoInteractions(videoProcessingService);
     }
@@ -201,7 +214,9 @@ class VideoControllerTest {
                         .param("privacyStatus", "PUBLIC")
                         .param("publishAt", Instant.now().plusSeconds(600).toString()))
                 .andExpect(status().isBadRequest())
-                .andExpect(content().string(containsString("publishAt can only be used with privacyStatus=PRIVATE")));
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.message", containsString("publishAt can only be used with privacyStatus=PRIVATE")));
 
         verifyNoInteractions(videoProcessingService);
     }
@@ -216,7 +231,9 @@ class VideoControllerTest {
                         .param("description", "My description")
                         .param("categoryId", "abc"))
                 .andExpect(status().isBadRequest())
-                .andExpect(content().string(containsString("categoryId must match")));
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.message", containsString("categoryId must match")));
 
         verifyNoInteractions(videoProcessingService);
     }
@@ -237,7 +254,9 @@ class VideoControllerTest {
                         .param("title", "My title")
                         .param("description", "My description"))
                 .andExpect(status().isBadRequest())
-                .andExpect(content().string(containsString("thumbnail must have content type image/jpeg or image/png.")));
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.message", containsString("thumbnail must have content type image/jpeg or image/png.")));
 
         verifyNoInteractions(videoProcessingService);
     }
@@ -252,7 +271,9 @@ class VideoControllerTest {
                         .param("title", "My title")
                         .param("description", "My description"))
                 .andExpect(status().isBadRequest())
-                .andExpect(content().string(containsString("vignetteStrength must be between")));
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.message", containsString("vignetteStrength must be between")));
 
         verifyNoInteractions(videoProcessingService);
     }
@@ -273,7 +294,9 @@ class VideoControllerTest {
                         .param("title", "My title")
                         .param("description", "My description"))
                 .andExpect(status().isBadRequest())
-                .andExpect(content().string(containsString("thumbnail must be <= 2MB")));
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.message", containsString("thumbnail must be <= 2MB")));
 
         verifyNoInteractions(videoProcessingService);
     }
@@ -318,7 +341,45 @@ class VideoControllerTest {
 
         mockMvc.perform(get("/api/video/status/missing"))
                 .andExpect(status().isNotFound())
-                .andExpect(content().string(containsString("Job not found")));
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.code").value("JOB_NOT_FOUND"))
+                .andExpect(jsonPath("$.field").value("jobId"))
+                .andExpect(jsonPath("$.message", containsString("Job not found")));
+    }
+
+    @Test
+    void cancelReturnsUpdatedJobStatus() throws Exception {
+        VideoJobStatus cancelledStatus = new VideoJobStatus(
+                "job-123",
+                VideoJobState.FAILED,
+                "Cancelled by user.",
+                Instant.parse("2026-01-01T00:00:00Z"),
+                Instant.parse("2026-01-01T00:00:05Z"),
+                PrivacyStatus.PRIVATE,
+                List.of("music"),
+                "10",
+                null,
+                null,
+                null,
+                null);
+        when(videoProcessingService.cancelJob("job-123")).thenReturn(cancelledStatus);
+
+        mockMvc.perform(post("/api/video/status/job-123/cancel"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.jobId").value("job-123"))
+                .andExpect(jsonPath("$.state").value("FAILED"))
+                .andExpect(jsonPath("$.message").value("Cancelled by user."));
+    }
+
+    @Test
+    void retryReturnsAcceptedWithNewJobId() throws Exception {
+        when(videoProcessingService.retryJob("job-123")).thenReturn("job-456");
+
+        mockMvc.perform(post("/api/video/status/job-123/retry"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.jobId").value("job-456"))
+                .andExpect(jsonPath("$.state").value("QUEUED"))
+                .andExpect(jsonPath("$.message", containsString("Retry job accepted")));
     }
 
     private MockMultipartFile validImage() {

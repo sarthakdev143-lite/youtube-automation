@@ -52,7 +52,7 @@ Content-Type: `multipart/form-data`
 Required fields:
 - `image` (file, `image/*`)
 - `audio` (file, `audio/*`)
-- `duration` (integer seconds, `1` to `36000`)
+- `duration` (integer seconds, `1` to `21600`)
 - `title` (max `100` chars)
 - `description` (max `5000` chars)
 
@@ -110,6 +110,44 @@ Successful response: `200 OK`
 ```
 
 States: `QUEUED`, `PROCESSING`, `COMPLETED`, `FAILED`
+
+### Cancel Job
+
+`POST /api/video/status/{jobId}/cancel`
+
+Cancels a `QUEUED` or `PROCESSING` job. Completed jobs cannot be cancelled.
+
+Response: `200 OK` with full `VideoJobStatus` payload.
+
+### Retry Job
+
+`POST /api/video/status/{jobId}/retry`
+
+Creates a new queued job by cloning a previous `FAILED` job's metadata and inputs.
+
+Response: `202 Accepted`
+
+```json
+{
+  "jobId": "2f8360f0-7bfd-40f3-9a3a-ce1e5f0f3a21",
+  "state": "QUEUED",
+  "message": "Retry job accepted. Poll /api/video/status/{jobId} for progress."
+}
+```
+
+## Error Response Format
+
+Validation, conflict, and not-found failures now return a consistent JSON shape:
+
+```json
+{
+  "code": "INVALID_REQUEST",
+  "message": "Duration must be between 1 and 21600 seconds.",
+  "field": null
+}
+```
+
+Example codes: `INVALID_REQUEST`, `JOB_NOT_FOUND`, `NO_ACTIVE_JOB`, `ACTIVE_JOB_CONFLICT`, `RETRY_NOT_ALLOWED`, `CANCEL_NOT_ALLOWED`.
 
 ## cURL Examples
 
